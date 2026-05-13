@@ -1,0 +1,32 @@
+job_name: sentinel2_ndvi_2024-09-22_to_2026-04-22
+
+roi:
+  path: shahrestan/shahrestan.shp
+
+dataset:
+  name: sentinel-2
+  bands:
+    select: [B4, B8]
+  indices:
+    - name: NDVI
+
+date:
+  start: "2024-09-22"
+  end: "2026-04-22"
+
+composite:
+  strategy: mean
+  window:
+    type: fixed_days
+    size: 30
+    step: 30
+    label_format: "%Y-%m-%d"
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+
+asset:
+  project: ee-chrcheel
+  base_path: projects/ee-chrcheel/assets

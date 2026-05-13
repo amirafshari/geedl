@@ -4,7 +4,7 @@
 > No Google Cloud Storage. No Google Drive. No export tasks.
 > Resumable, crash-safe, fully YAML-driven.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 `geedl` is a high-throughput, local-first command-line tool for downloading
@@ -50,14 +50,26 @@ fails. **geedl skips all of that.**
 
 ## Installation
 
+`geedl` uses a **conda** environment for Python + system-level geospatial
+libraries (GDAL, PROJ, GEOS) and **uv** for fast Python dependency resolution
+inside that environment.
+
 ```bash
-pip install -e .
+# 1. Create and activate the conda environment
+conda create -n geedl python=3.12 -y
+conda activate geedl
+
+# 2. Install uv inside the env
+conda install -c conda-forge uv -y
+
+# 3. Install geedl with uv (editable)
+uv pip install -e .
 ```
 
 Or, with development tooling (pytest, ruff, mypy):
 
 ```bash
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 You'll also need to authenticate with Earth Engine once:
@@ -65,6 +77,9 @@ You'll also need to authenticate with Earth Engine once:
 ```bash
 earthengine authenticate
 ```
+
+> Every subsequent shell session needs `conda activate geedl` before running
+> the `geedl` CLI.
 
 ---
 
