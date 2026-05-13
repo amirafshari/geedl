@@ -50,6 +50,8 @@ def composite(
     effective = dataset_spec.composite_strategy_override or strategy
     if effective == "median":
         return col.median()
+    if effective == "mean":
+        return col.mean()
     if effective == "mosaic":
         return col.mosaic()
     if effective == "none":

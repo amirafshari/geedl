@@ -94,7 +94,7 @@ class WindowConfig(_Frozen):
 
 
 class CompositeConfig(_Frozen):
-    strategy: Literal["median", "mosaic", "none"] = "median"
+    strategy: Literal["median", "mean", "mosaic", "none"] = "median"
     window: WindowConfig = Field(default_factory=WindowConfig)
 
 

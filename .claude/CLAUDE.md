@@ -384,7 +384,7 @@ dataset.slc_off.strategy          "multi_temporal"
 dataset.slc_off.min_scenes_warning int
 date.start                        str (YYYY-MM-DD)
 date.end                          str (YYYY-MM-DD)
-composite.strategy                median | mosaic | none
+composite.strategy                median | mean | mosaic | none
 composite.window.type             fixed_days | calendar_month | calendar_year | full_range | scene
 composite.window.size             int (days, fixed_days only)
 composite.window.step             int | null
