@@ -1,0 +1,86 @@
+sentinel-2:
+  collection: COPERNICUS/S2_SR_HARMONIZED
+  bands:
+    B1:  {desc: "Coastal aerosol", res: 60}
+    B2:  {desc: "Blue",            res: 10}
+    B3:  {desc: "Green",           res: 10}
+    B4:  {desc: "Red",             res: 10}
+    B8:  {desc: "NIR",             res: 10}
+    B11: {desc: "SWIR-1",          res: 20}
+    B12: {desc: "SWIR-2",          res: 20}
+    SCL: {desc: "Scene class",     res: 20}
+  native_res: 10
+  cloud_mask: s2_scl_mask
+  scale_factor: 0.0001
+  offset: 0.0
+  date_property: system:time_start
+  slc_off_date: null
+
+sentinel-1:
+  collection: COPERNICUS/S1_GRD
+  bands:
+    VV:    {desc: "VV polarisation", res: 10}
+    VH:    {desc: "VH polarisation", res: 10}
+    angle: {desc: "Incidence angle", res: 10}
+  native_res: 10
+  cloud_mask: null
+  scale_factor: null
+  offset: 0.0
+  date_property: system:time_start
+  extra_filters:
+    - {property: instrumentMode,       value: IW}
+    - {property: orbitProperties_pass, value: DESCENDING}
+  slc_off_date: null
+  composite_strategy_override: mosaic
+
+landsat-7:
+  collection: LANDSAT/LE07/C02/T1_L2
+  bands:
+    SR_B1:    {desc: "Blue",    res: 30}
+    SR_B2:    {desc: "Green",   res: 30}
+    SR_B3:    {desc: "Red",     res: 30}
+    SR_B4:    {desc: "NIR",     res: 30}
+    SR_B5:    {desc: "SWIR-1",  res: 30}
+    SR_B7:    {desc: "SWIR-2",  res: 30}
+    QA_PIXEL: {desc: "Quality", res: 30}
+  native_res: 30
+  cloud_mask: landsat_qa_mask
+  scale_factor: 0.0000275
+  offset: -0.2
+  date_property: system:time_start
+  slc_off_date: "2003-05-31"
+  slc_off_coverage_loss: 0.22
+
+landsat-8:
+  collection: LANDSAT/LC08/C02/T1_L2
+  bands:
+    SR_B2:    {desc: "Blue",    res: 30}
+    SR_B3:    {desc: "Green",   res: 30}
+    SR_B4:    {desc: "Red",     res: 30}
+    SR_B5:    {desc: "NIR",     res: 30}
+    SR_B6:    {desc: "SWIR-1",  res: 30}
+    SR_B7:    {desc: "SWIR-2",  res: 30}
+    QA_PIXEL: {desc: "Quality", res: 30}
+  native_res: 30
+  cloud_mask: landsat_qa_mask
+  scale_factor: 0.0000275
+  offset: -0.2
+  date_property: system:time_start
+  slc_off_date: null
+
+landsat-9:
+  collection: LANDSAT/LC09/C02/T1_L2
+  bands:
+    SR_B2:    {desc: "Blue",    res: 30}
+    SR_B3:    {desc: "Green",   res: 30}
+    SR_B4:    {desc: "Red",     res: 30}
+    SR_B5:    {desc: "NIR",     res: 30}
+    SR_B6:    {desc: "SWIR-1",  res: 30}
+    SR_B7:    {desc: "SWIR-2",  res: 30}
+    QA_PIXEL: {desc: "Quality", res: 30}
+  native_res: 30
+  cloud_mask: landsat_qa_mask
+  scale_factor: 0.0000275
+  offset: -0.2
+  date_property: system:time_start
+  slc_off_date: null
