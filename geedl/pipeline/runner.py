@@ -5,13 +5,22 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 import ee
+import rasterio
 import yaml
+from tqdm import tqdm
+from rasterio.enums import Resampling
+from rasterio.merge import merge as rio_merge
 from rasterio.transform import Affine
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import transform as shp_transform
+import pyproj
 
 from ..config import JobConfig
 from ..datasets.registry import get as get_dataset
@@ -39,6 +48,23 @@ def _load_hook(spec: str | None) -> Callable[..., Any] | None:
     return getattr(module, fn_name)
 
 
+def _bump_progress(
+    progress: dict[str, Any] | None,
+    window_label: str,
+    *,
+    failed: bool,
+) -> None:
+    if progress is None:
+        return
+    progress["overall"].update(1)
+    bar = progress["windows"].get(window_label)
+    if bar is not None:
+        bar.update(1)
+    if failed:
+        progress["failed"] += 1
+        progress["overall"].set_postfix_str(f"failed={progress['failed']}", refresh=False)
+
+
 def _classify_ee_error(exc: BaseException) -> Exception:
     msg = str(exc).lower()
     if any(s in msg for s in ("rate limit", "429", "exceeded quota", "too many")):
@@ -60,6 +86,7 @@ async def _process_tile(
     checkpoint: Checkpoint,
     scheduler: Scheduler,
     hooks: dict[str, Callable[..., Any] | None],
+    progress: dict[str, Any] | None = None,
 ) -> None:
     tile_unit = f"{tile.grid_label}_{window.label}"
     if not checkpoint.claim(tile_unit):
@@ -70,7 +97,7 @@ async def _process_tile(
     width_px = int(round((maxx - minx) / resolution_m))
     height_px = int(round((maxy - miny) / resolution_m))
 
-    out_dir = output_root / cfg.dataset.name / window.label
+    out_dir = output_root / ".tmp" / cfg.dataset.name / window.label
     out_dir.mkdir(parents=True, exist_ok=True)
     fname = cfg.output.structure.filename_template.format(
         tile_id=tile.grid_label,
@@ -120,10 +147,17 @@ async def _process_tile(
     except downloader.TileShapeError as exc:
         log.error("tile %s shape mismatch — not retried: %s", tile_unit, exc)
         checkpoint.mark_failed(tile_unit, f"shape: {exc}")
+        _bump_progress(progress, window.label, failed=True)
         return
-    except Exception as exc:  # noqa: BLE001
+    except (RetryableError, downloader.EmptyTileError) as exc:
         log.error("tile %s exhausted retries: %s", tile_unit, exc)
         checkpoint.mark_failed(tile_unit, str(exc))
+        _bump_progress(progress, window.label, failed=True)
+        return
+    except Exception as exc:  # noqa: BLE001
+        log.error("tile %s failed (non-retryable): %s", tile_unit, exc)
+        checkpoint.mark_failed(tile_unit, str(exc))
+        _bump_progress(progress, window.label, failed=True)
         return
 
     try:
@@ -136,6 +170,7 @@ async def _process_tile(
     except downloader.EmptyTileError:
         log.warning("tile %s validation: empty — marking failed (will skip)", tile_unit)
         checkpoint.mark_failed(tile_unit, "empty tile after retries")
+        _bump_progress(progress, window.label, failed=True)
         return
 
     transform = Affine(resolution_m, 0.0, minx, 0.0, -resolution_m, maxy)
@@ -177,6 +212,7 @@ async def _process_tile(
     )
 
     checkpoint.mark_done(tile_unit, str(written))
+    _bump_progress(progress, window.label, failed=False)
     if hooks["post_tile"]:
         hooks["post_tile"](tile_unit=tile_unit, output_path=str(written), config=cfg)
 
@@ -252,12 +288,59 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
         for failed_id in ckpt.pending_ids(include_failed=True):
             ckpt.reset_to_pending(failed_id)
 
+    # Per-window scene count — drops windows that can't be composited.
+    # Done after retry_failed reset so we re-probe on every run (data may now exist).
+    min_scenes = cfg.composite.window.min_scenes
+    viable_windows: list[Window] = []
+    for w in windows:
+        n_scenes = compositor.count_window_scenes(cfg.dataset, dataset_spec, w, roi_fc)
+        if n_scenes < min_scenes:
+            log.warning(
+                "window %s has %d scenes (< min_scenes=%d) — skipping all tiles in this window",
+                w.label, n_scenes, min_scenes,
+            )
+            reason = f"window {w.label}: {n_scenes} scenes (< min_scenes={min_scenes})"
+            for t in tiles:
+                ckpt.mark_failed(f"{t.grid_label}_{w.label}", reason)
+            continue
+        viable_windows.append(w)
+    units = [(t, w) for w in viable_windows for t in tiles]
+
     pending = set(ckpt.pending_ids())
     work = [(t, w) for t, w in units if f"{t.grid_label}_{w.label}" in pending]
     log.info("%d/%d units pending", len(work), len(units))
 
     if hooks["pre_download"]:
         hooks["pre_download"](config=cfg, asset_id=asset_id, n_units=len(work))
+
+    # Per-window + overall progress bars. Position 0 is the overall bar;
+    # window bars stack below it in window order.
+    window_totals: dict[str, int] = {}
+    for t, w in work:
+        window_totals[w.label] = window_totals.get(w.label, 0) + 1
+
+    overall_bar = tqdm(
+        total=len(work),
+        desc="overall",
+        position=0,
+        unit="tile",
+        dynamic_ncols=True,
+    )
+    window_bars: dict[str, tqdm] = {}
+    for i, label in enumerate(sorted(window_totals), start=1):
+        window_bars[label] = tqdm(
+            total=window_totals[label],
+            desc=f"  {label}",
+            position=i,
+            unit="tile",
+            leave=False,
+            dynamic_ncols=True,
+        )
+    progress: dict[str, Any] = {
+        "overall": overall_bar,
+        "windows": window_bars,
+        "failed": 0,
+    }
 
     scheduler = Scheduler(cfg.pipeline.concurrency)
     try:
@@ -274,16 +357,21 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
                 checkpoint=ckpt,
                 scheduler=scheduler,
                 hooks=hooks,
+                progress=progress,
             )
 
         await scheduler.run(work, worker)
     finally:
         scheduler.close()
+        for bar in window_bars.values():
+            bar.close()
+        overall_bar.close()
 
     counts = ckpt.counts()
     log.info("final tile counts: %s", counts)
 
     if counts.get("done", 0) > 0 and counts.get("pending", 0) == 0 and counts.get("failed", 0) == 0:
+        _finalize_outputs(output_root, cfg, windows, roi_geom, epsg, dataset_spec)
         ckpt.mark_job_complete()
         _write_catalog(output_root, ckpt, cfg)
         if cfg.asset.auto_cleanup:
@@ -293,6 +381,103 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
         hooks["post_job"](config=cfg, counts=counts)
 
     ckpt.close()
+
+
+def _merge_window(
+    tile_dir: Path,
+    final_path: Path,
+    *,
+    compression: str,
+    fmt: str,
+    nodata: float,
+) -> Path | None:
+    tiles = sorted(tile_dir.glob("*.tif"))
+    if not tiles:
+        return None
+
+    srcs = [rasterio.open(t) for t in tiles]
+    try:
+        mosaic, transform = rio_merge(srcs, nodata=nodata)
+        ref = srcs[0]
+        profile = ref.profile.copy()
+        band_descs = ref.descriptions
+    finally:
+        for s in srcs:
+            s.close()
+
+    profile.update(
+        height=mosaic.shape[1],
+        width=mosaic.shape[2],
+        transform=transform,
+        nodata=nodata,
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        interleave="pixel",
+    )
+    if compression != "none":
+        profile["compress"] = compression
+    else:
+        profile.pop("compress", None)
+
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = final_path.with_suffix(final_path.suffix + ".tmp")
+    with rasterio.open(tmp, "w", **profile) as dst:
+        dst.write(mosaic)
+        for i, name in enumerate(band_descs, start=1):
+            if name:
+                dst.set_band_description(i, name)
+        if fmt == "COG":
+            dst.build_overviews([2, 4, 8], Resampling.average)
+            dst.update_tags(ns="rio_overview", resampling="average")
+    os.rename(tmp, final_path)
+    return final_path
+
+
+def _finalize_outputs(
+    output_root: Path,
+    cfg: JobConfig,
+    windows: list[Window],
+    roi_geom: BaseGeometry,
+    epsg: int,
+    dataset_spec,
+) -> None:
+    tmp_root = output_root / ".tmp" / cfg.dataset.name
+    if not tmp_root.exists():
+        return
+
+    project = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True).transform
+    geom_4326 = shp_transform(project, roi_geom)
+    bands = list(cfg.dataset.bands.select or []) + [i.output_band or i.name for i in cfg.dataset.indices]
+
+    final_dir = output_root / cfg.dataset.name
+    for w in windows:
+        tile_dir = tmp_root / w.label
+        if not tile_dir.exists():
+            continue
+        final_path = final_dir / f"{cfg.job_name}_{w.label}.tif"
+        merged = _merge_window(
+            tile_dir,
+            final_path,
+            compression=cfg.output.compression,
+            fmt=cfg.output.format,
+            nodata=cfg.output.nodata,
+        )
+        if merged is None:
+            continue
+        write_stac_sidecar(
+            tile_id=f"{cfg.job_name}_{w.label}",
+            output_tif=merged,
+            geometry=geom_4326,
+            start=datetime.combine(w.start, datetime.min.time()),
+            end=datetime.combine(w.end, datetime.min.time()),
+            platform=cfg.dataset.name,
+            gsd=dataset_spec.native_res,
+            bands=bands,
+            extra={"window_type": cfg.composite.window.type},
+        )
+
+    shutil.rmtree(output_root / ".tmp", ignore_errors=True)
 
 
 def _write_catalog(output_root: Path, ckpt: Checkpoint, cfg: JobConfig) -> None:
