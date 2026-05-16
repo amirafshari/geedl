@@ -20,6 +20,9 @@ composite:
     step: 30
     label_format: "%Y-%m-%d"
 
+pipeline:
+  concurrency: 16
+
 output:
   dir: ./output
   format: COG
