@@ -1,18 +1,16 @@
-job_name: sentinel2_ndvi_2024-09-22_to_2026-04-22
+job_name: sentinel1_test
 
 roi:
   path: shahrestan/shahrestan.shp
 
 dataset:
-  name: sentinel-2
+  name: sentinel-1
   bands:
-    select: [B4, B8]
-  indices:
-    - name: NDVI
+    select: [VV, VH]
 
 date:
-  start: "2024-09-22"
-  end: "2026-04-22"
+  start: "2022-04-22"
+  end: "2022-06-22"
 
 composite:
   strategy: mean
@@ -28,5 +26,11 @@ output:
   dtype: float32
 
 asset:
-  project: ee-chrcheel
-  base_path: projects/ee-chrcheel/assets
+  project: ee-tat3
+  base_path: projects/ee-tat3/assets
+
+auth:
+  method: service_account          # or service_account or browser
+  # required only for service_account:
+  service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
+  key_file: ee-tat3-835f3bd207eb.json

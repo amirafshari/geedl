@@ -135,6 +135,30 @@ class AssetConfig(_Frozen):
     auto_cleanup: bool = False
 
 
+class AuthConfig(_Frozen):
+    method: Literal["browser", "service_account"] = Field(
+        "browser",
+        description="Authentication method: 'browser' uses Application Default Credentials; "
+        "'service_account' uses a JSON key file.",
+    )
+    service_account_email: str | None = Field(
+        None, description="Service account email (required when method='service_account')."
+    )
+    key_file: str | None = Field(
+        None, description="Path to service account JSON key file (required when method='service_account')."
+    )
+
+    @model_validator(mode="after")
+    def _check_service_account_fields(self) -> "AuthConfig":
+        if self.method == "service_account":
+            missing = [f for f, v in [("service_account_email", self.service_account_email), ("key_file", self.key_file)] if v is None]
+            if missing:
+                raise ValueError(
+                    f"auth.method='service_account' requires: {', '.join(missing)}"
+                )
+        return self
+
+
 class HooksConfig(_Frozen):
     pre_download: str | None = None
     post_tile: str | None = None
@@ -160,6 +184,7 @@ class JobConfig(_Frozen):
     tiling: TilingConfig = Field(default_factory=TilingConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     asset: AssetConfig
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
 
     def config_hash(self) -> str:

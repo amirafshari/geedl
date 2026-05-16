@@ -133,10 +133,10 @@ def cleanup(
     config: Path = typer.Option(..., "--config", "-c"),
 ) -> None:
     """Delete the EE asset associated with a job."""
-    import ee
     from .roi.asset_manager import asset_id_for, delete_asset
+    from .utils.auth import initialize_ee
     cfg = load_config(config)
-    ee.Initialize(project=cfg.asset.project)
+    initialize_ee(cfg)
     aid = asset_id_for(cfg.asset.base_path, cfg.roi.path)
     delete_asset(aid)
     typer.echo(f"deleted: {aid}")

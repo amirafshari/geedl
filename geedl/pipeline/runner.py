@@ -22,6 +22,7 @@ from ..roi.asset_manager import asset_id_for, delete_asset, upload_roi_asset
 from ..roi.loader import load_roi
 from ..roi.simplifier import simplify_for_upload
 from ..roi.tiler import Tile, generate_tiles
+from ..utils.auth import initialize_ee
 from ..utils.retry import RetryableError, with_retry
 from ..utils.windows import Window, generate_windows
 from . import compositor, downloader, validator
@@ -181,7 +182,7 @@ async def _process_tile(
 
 
 async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
-    ee.Initialize(project=cfg.asset.project)
+    initialize_ee(cfg)
 
     hooks = {
         "pre_download": _load_hook(cfg.hooks.pre_download),
