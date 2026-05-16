@@ -22,6 +22,7 @@ dependencies = [
     "pystac>=1.9",
     "pyarrow>=14.0",
     "aiohttp>=3.9",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
