@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-BUDGET_BYTES = 40_000_000
+# EE computePixels caps output at ~48 MB. Large ROIs that span multiple UTM
+# zones trigger up to 2.25x internal reprojection oversampling, so the visible
+# request size can be ~2.25x what our output grid implies. Budget is sized to
+# stay safe under that worst case: 20 MB * 0.8 headroom = 16 MB target,
+# x 2.25 = 36 MB << 48 MB cap.
+BUDGET_BYTES = 20_000_000
 HEADROOM = 0.80
 
 
