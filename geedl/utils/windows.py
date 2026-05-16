@@ -90,9 +90,11 @@ def generate_windows(
         size_delta = timedelta(days=size)
         step_delta = timedelta(days=step_days)
         while cursor <= end:
-            w_end = min(cursor + size_delta - timedelta(days=1), end)
-            anchor_date = _anchor(cursor, w_end, anchor)
-            windows.append(Window(cursor, w_end, anchor_date.strftime(label_format)))
+            full_end = cursor + size_delta - timedelta(days=1)
+            if full_end > end:
+                break
+            anchor_date = _anchor(cursor, full_end, anchor)
+            windows.append(Window(cursor, full_end, anchor_date.strftime(label_format)))
             cursor += step_delta
         return windows
 

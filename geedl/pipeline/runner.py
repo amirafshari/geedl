@@ -149,13 +149,8 @@ async def _process_tile(
         checkpoint.mark_failed(tile_unit, f"shape: {exc}")
         _bump_progress(progress, window.label, failed=True)
         return
-    except (RetryableError, downloader.EmptyTileError) as exc:
-        log.error("tile %s exhausted retries: %s", tile_unit, exc)
-        checkpoint.mark_failed(tile_unit, str(exc))
-        _bump_progress(progress, window.label, failed=True)
-        return
     except Exception as exc:  # noqa: BLE001
-        log.error("tile %s failed (non-retryable): %s", tile_unit, exc)
+        log.error("tile %s exhausted retries: %s", tile_unit, exc)
         checkpoint.mark_failed(tile_unit, str(exc))
         _bump_progress(progress, window.label, failed=True)
         return
@@ -287,24 +282,6 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
     if retry_failed:
         for failed_id in ckpt.pending_ids(include_failed=True):
             ckpt.reset_to_pending(failed_id)
-
-    # Per-window scene count — drops windows that can't be composited.
-    # Done after retry_failed reset so we re-probe on every run (data may now exist).
-    min_scenes = cfg.composite.window.min_scenes
-    viable_windows: list[Window] = []
-    for w in windows:
-        n_scenes = compositor.count_window_scenes(cfg.dataset, dataset_spec, w, roi_fc)
-        if n_scenes < min_scenes:
-            log.warning(
-                "window %s has %d scenes (< min_scenes=%d) — skipping all tiles in this window",
-                w.label, n_scenes, min_scenes,
-            )
-            reason = f"window {w.label}: {n_scenes} scenes (< min_scenes={min_scenes})"
-            for t in tiles:
-                ckpt.mark_failed(f"{t.grid_label}_{w.label}", reason)
-            continue
-        viable_windows.append(w)
-    units = [(t, w) for w in viable_windows for t in tiles]
 
     pending = set(ckpt.pending_ids())
     work = [(t, w) for t, w in units if f"{t.grid_label}_{w.label}" in pending]

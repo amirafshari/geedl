@@ -14,12 +14,25 @@ def test_fixed_days_non_overlapping():
         date(2023, 1, 15), date(2023, 6, 30),
         "fixed_days", size=40, step=40,
     )
-    assert len(ws) == 5
+    # Trailing partial window (only 7 days, < size=40) is dropped.
+    assert len(ws) == 4
     assert ws[0].start == date(2023, 1, 15)
     assert ws[0].end == date(2023, 2, 23)
     assert ws[0].label == "2023-01-15"
-    assert ws[-1].start == date(2023, 6, 24)
-    assert ws[-1].end == date(2023, 6, 30)
+    assert ws[-1].start == date(2023, 5, 15)
+    assert ws[-1].end == date(2023, 6, 23)
+
+
+def test_fixed_days_drops_short_trailing_window():
+    ws = generate_windows(
+        date(2022, 4, 22), date(2022, 6, 22),
+        "fixed_days", size=30, step=30,
+    )
+    # 62 days total → two full 30-day windows, trailing 2-day sliver dropped.
+    assert len(ws) == 2
+    assert ws[0].start == date(2022, 4, 22)
+    assert ws[1].start == date(2022, 5, 22)
+    assert ws[1].end == date(2022, 6, 20)
 
 
 def test_fixed_days_overlapping():
