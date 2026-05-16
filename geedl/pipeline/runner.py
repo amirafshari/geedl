@@ -16,6 +16,7 @@ import rasterio
 import yaml
 from tqdm import tqdm
 from rasterio.enums import Resampling
+from rasterio.mask import mask as rio_mask
 from rasterio.merge import merge as rio_merge
 from rasterio.transform import Affine
 from shapely.geometry.base import BaseGeometry
@@ -367,6 +368,7 @@ def _merge_window(
     compression: str,
     fmt: str,
     nodata: float,
+    clip_geom: BaseGeometry | None = None,
 ) -> Path | None:
     tiles = sorted(tile_dir.glob("*.tif"))
     if not tiles:
@@ -392,6 +394,26 @@ def _merge_window(
         blockysize=256,
         interleave="pixel",
     )
+
+    if clip_geom is not None:
+        mem_profile = {**profile, "driver": "GTiff", "count": mosaic.shape[0]}
+        mem_profile.pop("compress", None)
+        with rasterio.io.MemoryFile() as memfile:
+            with memfile.open(**mem_profile) as tmp_ds:
+                tmp_ds.write(mosaic)
+            with memfile.open() as tmp_ds:
+                mosaic, transform = rio_mask(
+                    tmp_ds,
+                    [clip_geom.__geo_interface__],
+                    crop=True,
+                    nodata=nodata,
+                    filled=True,
+                )
+        profile.update(
+            height=mosaic.shape[1],
+            width=mosaic.shape[2],
+            transform=transform,
+        )
     if compression != "none":
         profile["compress"] = compression
     else:
@@ -439,6 +461,7 @@ def _finalize_outputs(
             compression=cfg.output.compression,
             fmt=cfg.output.format,
             nodata=cfg.output.nodata,
+            clip_geom=roi_geom,
         )
         if merged is None:
             continue
