@@ -1,0 +1,51 @@
+# Unique name for this job (used in logs, checkpoint DB, catalog).
+job_name: sentinel2_ndvi_only
+
+roi:
+  # Path to shapefile (.shp, .geojson, .gpkg).
+  path: assets/lavan-test.shp
+
+dataset:
+  # Dataset slug from registry.yaml.
+  name: sentinel-2
+  bands:
+    # Select only the bands required to compute NDVI (Red + NIR).
+    select: [B4, B8]
+  indices:
+    - name: NDVI
+  cloud_mask:
+    enabled: true
+    profile: auto
+    mask_shadow: true
+    mask_snow: false
+
+date:
+  # Inclusive date range (YYYY-MM-DD).
+  start: "2026-05-05"
+  end: "2026-05-05"
+
+composite:
+  strategy: median
+  window:
+    type: scene
+    label_format: "%Y-%m-%d"
+
+pipeline:
+  concurrency: 8
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+  structure:
+    # Write the NDVI index to its own GeoTIFF, separate from source bands.
+    separate_indices: true
+
+asset:
+  project: ee-tat3
+  base_path: projects/ee-tat3/assets
+
+auth:
+  method: service_account
+  service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
+  key_file: ee-tat3-835f3bd207eb.json

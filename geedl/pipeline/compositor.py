@@ -17,13 +17,20 @@ def build_collection(
     window: Window,
     roi_fc: ee.FeatureCollection,
 ) -> ee.ImageCollection:
-    col = (
-        ee.ImageCollection(dataset_spec.collection)
-        .filterDate(window.start.isoformat(), window.end.isoformat())
-        .filterBounds(roi_fc.geometry())
-    )
-    for f in dataset_spec.extra_filters:
-        col = col.filter(ee.Filter.eq(f["property"], f["value"]))
+    if window.scene_ids:
+        # Scene mode with pinned IDs: build from explicit images so we use
+        # exactly the scenes the coverage filter approved.
+        col = ee.ImageCollection(
+            [ee.Image(f"{dataset_spec.collection}/{sid}") for sid in window.scene_ids]
+        )
+    else:
+        col = (
+            ee.ImageCollection(dataset_spec.collection)
+            .filterDate(window.start.isoformat(), window.end.isoformat())
+            .filterBounds(roi_fc.geometry())
+        )
+        for f in dataset_spec.extra_filters:
+            col = col.filter(ee.Filter.eq(f["property"], f["value"]))
     if dataset_cfg.cloud_mask.enabled and dataset_spec.cloud_mask:
         profile_name = (
             dataset_spec.cloud_mask

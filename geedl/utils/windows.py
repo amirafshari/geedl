@@ -11,6 +11,10 @@ class Window:
     start: date
     end: date
     label: str
+    # Scene-mode only: explicit EE asset IDs to pin the collection to a
+    # specific set of scenes (e.g. after per-scene ROI coverage filtering).
+    # build_collection will filter by these IDs instead of date+bounds.
+    scene_ids: tuple[str, ...] | None = None
 
 
 def _add_one_month(d: date) -> date:

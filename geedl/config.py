@@ -85,6 +85,14 @@ class WindowConfig(_Frozen):
     anchor: Literal["start", "end", "center"] = "start"
     min_scenes: int = 1
     label_format: str = "%Y-%m-%d"
+    min_valid_coverage: float = Field(
+        0.5,
+        ge=0.0,
+        le=1.0,
+        description="Scene mode only: drop scenes whose cloud-free pixel "
+        "fraction over the ROI is below this threshold; if all are dropped, "
+        "suggest cleaner nearby dates.",
+    )
 
     @model_validator(mode="after")
     def _check_fixed_days(self) -> "WindowConfig":

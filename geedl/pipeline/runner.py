@@ -35,10 +35,13 @@ from ..roi.tiler import Tile, generate_tiles
 from ..utils.auth import initialize_ee
 from ..utils.retry import RetryableError, with_retry
 from ..utils.windows import Window, generate_windows
+from ..datasets import cloud_masks
 from . import compositor, downloader, validator
 from .scenes import (
     NoScenesAvailableError,
     enumerate_scenes,
+    filter_scenes_by_coverage,
+    scene_roi_coverage,
     scenes_to_windows,
     suggest_nearest_dates,
 )
@@ -70,6 +73,40 @@ def _bump_progress(
     if failed:
         progress["failed"] += 1
         progress["overall"].set_postfix_str(f"failed={progress['failed']}", refresh=False)
+
+
+def _suggest_cleaner_dates(
+    dataset_spec,
+    roi_fc: ee.FeatureCollection,
+    target,
+    mask_fn,
+    min_coverage: float,
+    *,
+    n: int = 5,
+    candidates: int = 12,
+) -> list:
+    """Find up to `n` nearby dates whose ROI coverage clears `min_coverage`.
+
+    `suggest_nearest_dates` returns dates that have *any* scene; we further
+    filter by per-scene coverage so the suggestions are actually useful. Caps
+    the number of EE coverage calls at `candidates` to control cost.
+    """
+    nearby = suggest_nearest_dates(dataset_spec, roi_fc, target, n=candidates)
+    if not nearby:
+        return []
+    scored: list[tuple[float, "date"]] = []
+    from datetime import timedelta as _td
+    for d in nearby:
+        scenes = enumerate_scenes(dataset_spec, roi_fc, d, d)
+        if not scenes:
+            continue
+        best = max(
+            scene_roi_coverage(dataset_spec, s, roi_fc, mask_fn) for s in scenes
+        )
+        if best >= min_coverage:
+            scored.append((abs((d - target).days), d))
+    scored.sort()
+    return [d for _, d in scored[:n]]
 
 
 def _classify_ee_error(exc: BaseException) -> Exception:
@@ -121,6 +158,10 @@ async def _process_tile(
     )
     if tile.tile_class == "partial":
         image = image.clip(roi_fc)
+    # Materialise masked pixels (clouds, out-of-ROI, native gaps) as the
+    # configured nodata value. Without this, ee.data.computePixels would
+    # return 0 for masked pixels regardless of the GeoTIFF nodata tag.
+    image = image.unmask(cfg.output.nodata)
 
     affine = (resolution_m, 0.0, minx, 0.0, -resolution_m, maxy)
 
@@ -308,11 +349,40 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
             raise NoScenesAvailableError(
                 cfg.dataset.name, (cfg.date.start, cfg.date.end), suggestions
             )
+
+        min_cov = cfg.composite.window.min_valid_coverage
+        if min_cov > 0.0 and cfg.dataset.cloud_mask.enabled and dataset_spec.cloud_mask:
+            profile_name = (
+                dataset_spec.cloud_mask
+                if cfg.dataset.cloud_mask.profile == "auto"
+                else cfg.dataset.cloud_mask.profile
+            )
+            mask_fn = cloud_masks.get(
+                profile_name,
+                {
+                    "mask_shadow": cfg.dataset.cloud_mask.mask_shadow,
+                    "mask_snow": cfg.dataset.cloud_mask.mask_snow,
+                },
+            )
+            kept, _ = filter_scenes_by_coverage(
+                dataset_spec, scenes, roi_fc, mask_fn, min_cov
+            )
+            if not kept:
+                cleaner = _suggest_cleaner_dates(
+                    dataset_spec, roi_fc, cfg.date.start, mask_fn, min_cov
+                )
+                raise NoScenesAvailableError(
+                    cfg.dataset.name, (cfg.date.start, cfg.date.end), cleaner
+                )
+            scenes = kept
+
         windows = scenes_to_windows(scenes, cfg.composite.window.label_format)
-        # Each synthetic window holds exactly one day; force `none` so the
-        # composite returns the single scene (col.first()). Sentinel-1 keeps
-        # its registry-level `mosaic` override automatically.
-        cfg.composite.strategy = "none"
+        # Per-date windows carry the exact (coverage-filtered) scene IDs.
+        # `mosaic` combines tiles whose footprints together cover the ROI
+        # (one S2 swath rarely covers a province-sized AOI). Single-scene
+        # windows still work — mosaic of one image is that image.
+        # Sentinel-1 keeps its registry-level `mosaic` override automatically.
+        cfg.composite.strategy = "mosaic"
         log.info("scene mode: %d scenes → %d windows", len(scenes), len(windows))
     else:
         log.info("generated %d windows", len(windows))

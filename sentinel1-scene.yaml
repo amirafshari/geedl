@@ -3,7 +3,7 @@ job_name: sentinel1_test
 
 roi:
   # Path to shapefile (.shp, .geojson, .gpkg).
-  path: shahrestan/shahrestan.shp
+  path: assets/test2-kharg.shp
   # layer: null                       # Optional layer name for multi-layer files.
   # feature_mode: union               # How to combine features: union | split | filter.
   # filter_expr: null                 # Pandas query string used when feature_mode='filter'.
@@ -31,21 +31,16 @@ dataset:
 
 date:
   # Inclusive date range (YYYY-MM-DD).
-  start: "2022-04-22"
-  end: "2022-06-22"
+  start: "2026-05-08"
+  end: "2026-05-08"
 
 composite:
   # Compositing reducer: median | mean | mosaic | none.
-  strategy: mean
+  # Sentinel-1 always uses 'mosaic' via registry override.
+  strategy: mosaic
   window:
     # Window type: fixed_days | calendar_month | calendar_year | full_range | scene.
-    type: fixed_days
-    # Window length in days (fixed_days only).
-    size: 30
-    # Step in days between windows (null = same as size; smaller = overlapping windows).
-    step: 30
-    # anchor: start                   # Where to anchor the label date: start | end | center.
-    # min_scenes: 1                   # Minimum scenes required per window.
+    type: scene
     # strftime format used to label window folders/filenames.
     label_format: "%Y-%m-%d"
 
