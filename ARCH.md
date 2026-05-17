@@ -1,7 +1,11 @@
-# geedl — Design & Architecture Document
+# geedl — Design & Architecture
 
-> **geedl** (GEE Downloader) — Local-first, resumable, high-throughput downloader for Google Earth Engine.
-> Version: 0.2-design | Status: Pre-implementation
+> **geedl** (GEE Downloader) — local-first, resumable, high-throughput downloader for
+> Google Earth Engine. Source of truth for what the system is and how the pieces fit.
+> [CLAUDE.md](.claude/CLAUDE.md) is the rule sheet for agents touching the code; this
+> document is the narrative behind those rules.
+
+Version: 0.2 | Status: Implemented
 
 ---
 
@@ -13,7 +17,8 @@
 - Be **as fast as possible** within EE's API constraints.
 - Be **crash-safe and fully resumable** — any failure can be recovered and continued exactly.
 - Be **modular and YAML-driven** — every structural decision (band order, output shape,
-  time windows, compositing) is addressable from the config file without touching Python.
+  time windows, compositing, authentication) is addressable from the config file
+  without touching Python.
 - Be **AI-agent friendly** — the YAML config is the single source of truth; agents can
   refactor jobs, swap datasets, change output shapes, and wire hooks without reading source code.
 
@@ -24,45 +29,49 @@
 ```
 geedl/
   geedl/
-    cli.py                    # typer CLI entry point
-    config.py                 # pydantic config schema + validation
+    cli.py                    # typer CLI entry point (run / validate / status / plan / datasets / indices / cleanup)
+    config.py                 # pydantic v2 schema; canonical config hash
     datasets/
-      registry.yaml           # dataset definitions (collection, bands, resolution, masks)
-      registry.py             # YAML loader + dataset resolver
-      cloud_masks.py          # per-sensor cloud/shadow mask functions
+      registry.yaml           # dataset definitions (collection, bands, resolution, masks, overrides)
+      registry.py             # YAML loader + DatasetSpec / BandSpec dataclasses
+      cloud_masks.py          # per-sensor cloud/shadow mask functions (s2_scl_mask, landsat_qa_mask, ...)
     indices/
-      __init__.py             # @index decorator + global registry
-      optical.py              # NDVI, EVI, NDWI, SAVI, NBR, NDSI, BSI, ...
-      sar.py                  # RVI, entropy (Sentinel-1)
+      __init__.py             # @index decorator + apply_indices() + supports() + list_indices()
+      optical.py              # NDVI, NDWI, NDMI, NBR, NDSI, EVI, SAVI, BSI
+      sar.py                  # RVI, VV_VH_RATIO
     roi/
-      loader.py               # shapefile → GeoDataFrame, CRS handling
-      simplifier.py           # vertex reduction before asset upload
-      tiler.py                # grid decomposition + tile classification
-      asset_manager.py        # EE asset upload + reuse logic
+      loader.py               # shapefile → GeoDataFrame, feature_mode handling, auto-UTM reproject
+      simplifier.py           # vertex reduction before EE asset upload
+      tiler.py                # grid generation + tile classification + Hilbert ordering
+      asset_manager.py        # EE asset upload + reuse + delete (by sha1 of shapefile bytes)
     pipeline/
-      scheduler.py            # async task runner, concurrency control
-      downloader.py           # ee.data.computePixels wrapper
-      compositor.py           # window generation + mosaic/median strategies
-      validator.py            # per-tile integrity checks
+      runner.py               # job orchestration: ROI → tiles × windows → temp tiles → merge → catalog
+      scheduler.py            # asyncio + bounded semaphore + ThreadPoolExecutor
+      downloader.py           # ee.data.computePixels wrapper (NPY wire format)
+      compositor.py           # build_window_image: collection → composite → bands → indices → order
+      scenes.py               # EE-aware scene-mode helpers + NoScenesAvailableError
+      validator.py            # per-tile array integrity checks (shape, all-nodata, range)
     io/
-      writer.py               # rasterio GeoTIFF / COG writer (atomic)
-      catalog.py              # STAC item sidecar + GeoParquet index
-      checkpoint.py           # SQLite resume DB
+      writer.py               # atomic COG/GeoTIFF write + local rasterio mask + overlap crop
+      catalog.py              # STAC Item sidecars + GeoParquet index
+      checkpoint.py           # SQLite resume DB (WAL); crash recovery
     utils/
-      crs.py                  # auto-UTM detection
-      retry.py                # exponential backoff with jitter
-      budget.py               # pixel budget calculator
-      windows.py              # time window generator
+      auth.py                 # initialize_ee(cfg) — single ee.Initialize call site
+      crs.py                  # auto-UTM EPSG from ROI centroid
+      retry.py                # exponential backoff with full jitter (RetryableError)
+      budget.py               # safe tile size from pixel budget (20 MB cap)
+      windows.py              # pure Window generator (no EE, no I/O)
   tests/
     fixtures/                 # small test shapefiles + VCR cassettes
-    test_tiler.py
-    test_indices.py
-    test_checkpoint.py
-    test_downloader.py
-    test_windows.py
-  docs/
-  pyproject.toml
+  examples/
+    full-band-only.yaml       # documented job templates
+    ndvi-only.yaml
+    rgb-only.yaml
+    sentinel1-scene.yaml
+  ARCH.md                     # this file
+  .claude/CLAUDE.md           # agent rules / non-negotiables / contracts
   README.md
+  pyproject.toml
 ```
 
 ---
@@ -71,704 +80,559 @@ geedl/
 
 | Concern | Choice | Notes |
 |---|---|---|
-| EE access | `earthengine-api` (Python SDK) | Official; wraps REST API |
-| Direct pixel download | `ee.data.computePixels()` | No GCS/Drive required |
-| Shapefile I/O | `geopandas` + `fiona` | Full CRS support |
+| EE access | `earthengine-api` | Official Python SDK |
+| Direct pixel download | `ee.data.computePixels()` | No GCS/Drive |
+| Shapefile I/O | `geopandas` + `fiona` / `pyogrio` | Full CRS support |
 | Geometry ops | `shapely` | Tiling, intersection, coverage ratio |
-| Raster I/O | `rasterio` + `GDAL` | GeoTIFF, COG, reprojection, masking |
-| CLI | `typer` | Auto-docs, shell completion |
-| Config validation | `pydantic` v2 | Schema enforcement, helpful error messages |
-| Async runtime | `asyncio` + `aiohttp` | Non-blocking tile downloads |
-| Checkpointing | `sqlite3` (stdlib) | Zero extra dependency |
+| Raster I/O | `rasterio` + `GDAL` | COG, merge, mask, reprojection |
+| CLI | `typer` | Auto-docs, no-args-is-help |
+| Config validation | `pydantic` v2 (`extra=forbid`) | Schema enforcement |
+| Async runtime | `asyncio` + `ThreadPoolExecutor` | EE sync calls offloaded to threads |
+| Checkpointing | `sqlite3` (stdlib, WAL) | Zero extra dependency |
 | Spatial catalog | `geopandas` → GeoParquet | Queryable output index |
-| STAC sidecars | `pystac` | Per-tile metadata |
+| STAC sidecars | `pystac` | Per-tile + per-mosaic metadata |
+| Progress UI | `tqdm` | Overall + per-window stacked bars |
 | Testing | `pytest` + `pytest-recording` (VCR) | Replay EE HTTP responses |
 
 ---
 
-## 4. Full configuration schema
+## 4. Configuration schema
 
 The YAML config is the **single source of truth** for every decision geedl makes.
-An AI agent can read and modify this file to fully refactor a job without touching Python.
-All CLI flags mirror config keys and override them.
+The pydantic schema in `geedl/config.py` accepts no unknown keys (`extra="forbid"`).
+The full annotated job template lives in [examples/full-band-only.yaml](examples/full-band-only.yaml);
+sketched here with current defaults:
 
 ```yaml
-# ── IDENTITY ─────────────────────────────────────────────────────────────────
-job_name: my_sentinel2_ndvi_job   # used in logs and checkpoint DB
+job_name: my_sentinel2_ndvi_job
 
-# ── ROI ───────────────────────────────────────────────────────────────────────
 roi:
   path: parcels.shp
-  layer: null                  # optional layer name for multi-layer files
-  feature_mode: union          # union  — all features merged into one ROI (default)
-                               # split  — one output subfolder per feature
-                               # filter — only features matching filter_expr
-  filter_expr: null            # e.g. "crop_type == 'wheat'"
-  simplify_tolerance: auto     # metres, or "auto" = 10% of resolution
+  layer: null
+  feature_mode: union           # union | split | filter
+  filter_expr: null
+  simplify_tolerance: auto      # metres, or "auto" = 10% of native resolution
 
-# ── DATASET ───────────────────────────────────────────────────────────────────
 dataset:
-  name: sentinel-2             # slug from registry.yaml
-
+  name: sentinel-2
   bands:
-    select: [B4, B3, B2, B8]  # null = all bands from registry
-    order: [B2, B3, B4, B8]   # explicit output band order (null = same as select)
-    rename:                    # optional rename map applied after download
-      B2: blue
-      B3: green
-      B4: red
-      B8: nir
-    scale_factor: 0.0001       # multiplied after download (null = registry default)
-    offset: 0                  # additive offset applied after scale
-
+    select: [B4, B3, B2, B8]    # null = all non-internal bands in registry
+    order: null
+    rename: null
+    scale_factor: null          # null = registry default
+    offset: 0.0                 # null = registry default
   indices:
-    - name: NDVI
-      output_band: NDVI        # rename output band (null = index name)
-      position: after_bands    # after_bands | before_bands | <integer N>
-    - name: EVI
-      output_band: EVI
-      position: after_bands
-
+    - {name: NDVI, output_band: NDVI, position: after_bands}
   cloud_mask:
     enabled: true
-    profile: auto              # auto = registry default; or explicit fn name
+    profile: auto
     mask_shadow: true
     mask_snow: false
-
-  # Landsat 7 SLC-off handling (ignored for all other datasets)
   slc_off:
-    strategy: multi_temporal   # only valid strategy in geedl v0.1
-                               # relies on QA mask + multi-scene compositing
-                               # gaps fill naturally when window has >= 3 scenes
-    min_scenes_warning: 3      # warn at validation time if window likely has fewer
+    strategy: multi_temporal
+    min_scenes_warning: 3
 
-# ── DATE & WINDOWING ─────────────────────────────────────────────────────────
 date:
   start: "2023-01-15"
   end:   "2023-06-30"
 
 composite:
-  strategy: median             # median | mosaic | none
-                               # none = one output file per EE scene, no compositing
-
+  strategy: median              # median | mean | mosaic | none
   window:
-    type: fixed_days           # fixed_days      — arbitrary N-day windows
-                               # calendar_month  — 1st to last day of each month
-                               # calendar_year   — 1st Jan to 31st Dec
-                               # full_range      — single window over entire date range
-                               # scene           — no compositing; one file per scene
-    size: 40                   # days per window (fixed_days only)
-    step: 40                   # days between window starts
-                               # null = same as size (non-overlapping)
-                               # < size = overlapping windows
-    anchor: start              # start | end | center
-                               # which date within the window is the origin
-    min_scenes: 1              # skip window entirely if fewer EE scenes available
-    label_format: "%Y-%m-%d"  # strftime pattern used as output folder name
-                               # for fixed_days: label = window start date
+    type: full_range            # fixed_days | calendar_month | calendar_year | full_range | scene
+    size: null                  # days (fixed_days only)
+    step: null                  # null = same as size
+    anchor: start               # start | end | center
+    min_scenes: 1
+    label_format: "%Y-%m-%d"
+    min_valid_coverage: 0.5     # scene mode only — drop scenes below this ROI cloud-free fraction
 
-# ── OUTPUT SHAPE ─────────────────────────────────────────────────────────────
 output:
   dir: ./output
-  format: COG                  # COG | GeoTIFF
+  format: COG                   # COG | GeoTIFF
   nodata: -9999
-  dtype: float32               # float32 | int16 | uint16 (applied post-scale)
-  crs: null                    # null = auto-UTM from ROI centroid; or EPSG:XXXX
-  compression: LZW             # LZW | DEFLATE | ZSTD | none
-
+  dtype: float32                # float32 | int16 | uint16
+  crs: null                     # null = auto-UTM
+  compression: LZW              # LZW | DEFLATE | ZSTD | none
   structure:
-    timeseries_mode: false     # false = one file per window per tile (default)
-                               # true  = all windows stacked into one multi-band file
-                               #         band order: [B_w1, B_w2, NDVI_w1, NDVI_w2, ...]
-    band_interleave: BIP       # BIP | BIL | BSQ (meaningful only for timeseries_mode)
+    timeseries_mode: false
+    band_interleave: BIP        # BIP | BIL | BSQ
     filename_template: "tile_{tile_id}_{window_label}"
-                               # available variables:
-                               #   tile_id, window_label, dataset,
-                               #   date_start, date_end, strategy
-    separate_indices: false    # false = indices in same file as spectral bands
-                               # true  = one file for bands, one file for indices
+    separate_indices: true      # default true — indices written to sibling files
 
-# ── TILING ───────────────────────────────────────────────────────────────────
 tiling:
-  max_tile_bytes: null         # null = auto-calculated from pixel budget
-  overlap_px: 2                # pixel overlap buffer added to each tile request
-  skip_coverage_threshold: 0.05  # skip tiles with < 5% ROI coverage
-  grid_snap_m: 100             # snap grid origin to nearest N metres
+  max_tile_bytes: null          # null = auto from pixel budget
+  overlap_px: 2
+  skip_coverage_threshold: 0.05
+  grid_snap_m: 100
 
-# ── PIPELINE ─────────────────────────────────────────────────────────────────
 pipeline:
-  concurrency: 16              # async semaphore size; tune to your EE quota
-  max_retries: 6               # per tile; exponential backoff with jitter
-  retry_base_delay: 1.0        # seconds
-  timeout_per_tile: 120        # seconds; hard-cancel if EE hangs
+  concurrency: 16
+  max_retries: 6
+  retry_base_delay: 1.0
+  timeout_per_tile: 120
 
-# ── EE ASSET ─────────────────────────────────────────────────────────────────
 asset:
-  project: my-ee-project       # EE project ID or username
+  project: my-ee-project        # required
   base_path: users/me/geedl_assets
-  auto_cleanup: false          # delete ROI asset after job completes
+  auto_cleanup: false
 
-# ── HOOKS (AI agent extensibility) ───────────────────────────────────────────
+auth:                           # NEW — picks the EE init path
+  method: browser               # browser | service_account
+  service_account_email: null   # required when method == service_account
+  key_file: null                # required when method == service_account
+
 hooks:
-  pre_download: null           # "mymodule:fn" — called before pipeline starts
-  post_tile: null              # called after each tile is written to disk
-  post_job: null               # called after all tiles complete
+  pre_download: null            # "module.path:fn"
+  post_tile: null
+  post_job: null
 ```
+
+The full field index (with types) lives at the bottom of [.claude/CLAUDE.md](.claude/CLAUDE.md).
 
 ---
 
 ## 5. Dataset registry (`datasets/registry.yaml`)
 
+Five datasets ship today. Each entry is a flat dict — adding a dataset means
+adding one YAML entry, optionally one cloud-mask function, and optionally
+extending `BAND_MAP` in `indices/optical.py`.
+
 ```yaml
 sentinel-2:
   collection: COPERNICUS/S2_SR_HARMONIZED
   bands:
-    B1:  {desc: "Coastal aerosol", res: 60}
-    B2:  {desc: "Blue",           res: 10}
-    B3:  {desc: "Green",          res: 10}
-    B4:  {desc: "Red",            res: 10}
-    B8:  {desc: "NIR",            res: 10}
-    B11: {desc: "SWIR-1",         res: 20}
-    B12: {desc: "SWIR-2",         res: 20}
-    SCL: {desc: "Scene class",    res: 20}
+    B1: {...}  B2: {...}  ...  B12: {...}
+    SCL: {desc: "Scene class", res: 20, scaled: false, internal: true}
   native_res: 10
   cloud_mask: s2_scl_mask
   scale_factor: 0.0001
+  offset: 0.0
   date_property: system:time_start
   slc_off_date: null
 
 sentinel-1:
   collection: COPERNICUS/S1_GRD
-  bands:
-    VV:    {desc: "VV polarisation",  res: 10}
-    VH:    {desc: "VH polarisation",  res: 10}
-    angle: {desc: "Incidence angle",  res: 10}
-  native_res: 10
-  cloud_mask: null             # SAR is cloud-transparent
-  scale_factor: null           # already in dB
-  date_property: system:time_start
+  bands: {VV, VH, angle}
+  cloud_mask: null
+  scale_factor: null
   extra_filters:
-    - {property: instrumentMode,        value: IW}
-    - {property: orbitProperties_pass,  value: DESCENDING}
-  slc_off_date: null
+    - {property: instrumentMode,       value: IW}
+    - {property: orbitProperties_pass, value: DESCENDING}
   composite_strategy_override: mosaic   # median is meaningless for SAR backscatter
 
-landsat-7:
-  collection: LANDSAT/LE07/C02/T1_L2
-  bands:
-    SR_B1:    {desc: "Blue",    res: 30}
-    SR_B2:    {desc: "Green",   res: 30}
-    SR_B3:    {desc: "Red",     res: 30}
-    SR_B4:    {desc: "NIR",     res: 30}
-    SR_B5:    {desc: "SWIR-1",  res: 30}
-    SR_B7:    {desc: "SWIR-2",  res: 30}
-    QA_PIXEL: {desc: "Quality", res: 30}
-  native_res: 30
-  cloud_mask: landsat_qa_mask
-  scale_factor: 0.0000275
-  offset: -0.2
-  date_property: system:time_start
-  slc_off_date: "2003-05-31"   # gaps present in all scenes after this date
-  slc_off_coverage_loss: 0.22  # ~22% nodata per scene at full extent
-
-landsat-8:
-  collection: LANDSAT/LC08/C02/T1_L2
-  bands:
-    SR_B2:    {desc: "Blue",    res: 30}
-    SR_B3:    {desc: "Green",   res: 30}
-    SR_B4:    {desc: "Red",     res: 30}
-    SR_B5:    {desc: "NIR",     res: 30}
-    SR_B6:    {desc: "SWIR-1",  res: 30}
-    SR_B7:    {desc: "SWIR-2",  res: 30}
-    QA_PIXEL: {desc: "Quality", res: 30}
-  native_res: 30
-  cloud_mask: landsat_qa_mask
-  scale_factor: 0.0000275
-  offset: -0.2
-  date_property: system:time_start
-  slc_off_date: null
-
-landsat-9:
-  collection: LANDSAT/LC09/C02/T1_L2
-  bands:
-    SR_B2:    {desc: "Blue",    res: 30}
-    SR_B3:    {desc: "Green",   res: 30}
-    SR_B4:    {desc: "Red",     res: 30}
-    SR_B5:    {desc: "NIR",     res: 30}
-    SR_B6:    {desc: "SWIR-1",  res: 30}
-    SR_B7:    {desc: "SWIR-2",  res: 30}
-    QA_PIXEL: {desc: "Quality", res: 30}
-  native_res: 30
-  cloud_mask: landsat_qa_mask
-  scale_factor: 0.0000275
-  offset: -0.2
-  date_property: system:time_start
-  slc_off_date: null
+landsat-7:  # SR_B1..SR_B5, SR_B7, QA_PIXEL — slc_off_date: 2003-05-31, loss ~22%
+landsat-8:  # SR_B2..SR_B7, QA_PIXEL
+landsat-9:  # SR_B2..SR_B7, QA_PIXEL
 ```
+
+Per-band flags:
+
+- `scaled: false` — skip scale/offset multiplication (kept as integer codes; SCL, QA_PIXEL).
+- `internal: true` — excluded from `select=null` default expansion; available if explicitly listed.
 
 ---
 
 ## 6. Index engine
 
-Indices are pure functions registered with a decorator.
-Adding a new index requires no changes to core code — only a new function in
-`indices/optical.py` or `indices/sar.py`.
+Indices are pure functions registered with the `@index` decorator. Adding a new
+index touches **one file**: `indices/optical.py` or `indices/sar.py`.
 
 ```python
 # indices/__init__.py
 _REGISTRY: dict[str, dict] = {}
 
-def index(name: str, datasets: list[str] | None = None):
-    def decorator(fn):
+def index(name, datasets=None):
+    def deco(fn):
+        if name in _REGISTRY:
+            raise ValueError(f"index {name!r} already registered")
         _REGISTRY[name] = {"fn": fn, "datasets": datasets}
         return fn
-    return decorator
+    return deco
 
-def apply_indices(image: ee.Image, names: list[str], dataset: str) -> ee.Image:
+def apply_indices(image, names, dataset) -> ee.Image:
     for name in names:
-        entry = _REGISTRY[name]
+        entry = _REGISTRY[name]                 # KeyError if unknown
         if entry["datasets"] and dataset not in entry["datasets"]:
-            raise ValueError(f"Index {name} not supported for {dataset}")
+            raise ValueError(...)
         image = image.addBands(entry["fn"](image, dataset))
     return image
 ```
 
-```python
-# indices/optical.py  — band name map per dataset
-BAND_MAP = {
-    "sentinel-2": {"nir":"B8",    "red":"B4",    "green":"B3", "blue":"B2",  "swir1":"B11","swir2":"B12"},
-    "landsat-7":  {"nir":"SR_B4", "red":"SR_B3", "green":"SR_B2","blue":"SR_B1","swir1":"SR_B5","swir2":"SR_B7"},
-    "landsat-8":  {"nir":"SR_B5", "red":"SR_B4", "green":"SR_B3","blue":"SR_B2","swir1":"SR_B6","swir2":"SR_B7"},
-    "landsat-9":  {"nir":"SR_B5", "red":"SR_B4", "green":"SR_B3","blue":"SR_B2","swir1":"SR_B6","swir2":"SR_B7"},
-}
+Helpers: `supports(name, dataset)` and `list_indices(dataset=None)` back the
+`geedl indices` / `geedl validate` CLI commands.
 
-@index("NDVI", datasets=["sentinel-2","landsat-7","landsat-8","landsat-9"])
-def ndvi(img, ds):
-    b = BAND_MAP[ds]
-    return img.normalizedDifference([b["nir"], b["red"]]).rename("NDVI")
+`cli.py` imports `geedl.indices.optical` and `geedl.indices.sar` at startup so
+their decorators register before any job runs. **No other module imports specific
+index modules.**
 
-@index("NDWI", datasets=["sentinel-2","landsat-7","landsat-8","landsat-9"])
-def ndwi(img, ds):
-    b = BAND_MAP[ds]
-    return img.normalizedDifference([b["green"], b["nir"]]).rename("NDWI")
+Currently registered:
 
-@index("EVI", datasets=["sentinel-2","landsat-8","landsat-9"])
-def evi(img, ds):
-    b = BAND_MAP[ds]
-    return img.expression(
-        "2.5*(NIR-RED)/(NIR+6*RED-7.5*BLUE+1)",
-        {"NIR":img.select(b["nir"]),"RED":img.select(b["red"]),"BLUE":img.select(b["blue"])}
-    ).rename("EVI")
-
-@index("NBR", datasets=["sentinel-2","landsat-7","landsat-8","landsat-9"])
-def nbr(img, ds):
-    b = BAND_MAP[ds]
-    return img.normalizedDifference([b["nir"], b["swir2"]]).rename("NBR")
-
-@index("SAVI", datasets=["sentinel-2","landsat-7","landsat-8","landsat-9"])
-def savi(img, ds):
-    b = BAND_MAP[ds]; L = 0.5
-    return img.expression(
-        "((NIR-RED)/(NIR+RED+L))*(1+L)",
-        {"NIR":img.select(b["nir"]),"RED":img.select(b["red"]),"L":L}
-    ).rename("SAVI")
-
-@index("BSI", datasets=["sentinel-2","landsat-8","landsat-9"])
-def bsi(img, ds):
-    b = BAND_MAP[ds]
-    return img.expression(
-        "(SWIR1+RED-NIR-BLUE)/(SWIR1+RED+NIR+BLUE)",
-        {"SWIR1":img.select(b["swir1"]),"RED":img.select(b["red"]),
-         "NIR":img.select(b["nir"]),"BLUE":img.select(b["blue"])}
-    ).rename("BSI")
-
-# indices/sar.py
-@index("RVI", datasets=["sentinel-1"])
-def rvi(img, ds):
-    return img.expression(
-        "4*VH/(VV+VH)", {"VV":img.select("VV"),"VH":img.select("VH")}
-    ).rename("RVI")
-```
+| Index | Optical | SAR |
+|---|---|---|
+| NDVI, NDWI, NDMI, NBR, NDSI, SAVI | S2 + L7 + L8 + L9 | — |
+| EVI, BSI | S2 + L8 + L9 (no L7 — no blue/SWIR in same scaling family) | — |
+| RVI, VV_VH_RATIO | — | S1 |
 
 ---
 
 ## 7. Time window system
 
-Window generation is a pure function in `utils/windows.py`.
-It takes config and returns an ordered list of `Window` named tuples.
-The output folder name is derived from `window.label_format` applied to the
-window's anchor date — so folder names are always unambiguous regardless of
-window type or size.
+Window generation lives in `utils/windows.py` and is a **pure function** — no EE,
+no I/O, no logging. Tests run without credentials.
 
 ```python
-Window = namedtuple("Window", ["start", "end", "label"])
-
-def generate_windows(date_cfg, window_cfg) -> list[Window]:
-    start, end = date_cfg.start, date_cfg.end
-
-    if window_cfg.type == "full_range":
-        return [Window(start, end, "full")]
-
-    if window_cfg.type == "scene":
-        return None  # sentinel value — compositor bypassed, one file per EE scene
-
-    if window_cfg.type == "calendar_month":
-        windows = []
-        cursor = start.replace(day=1)
-        while cursor <= end:
-            w_end = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-            windows.append(Window(cursor, min(w_end, end), cursor.strftime(window_cfg.label_format)))
-            cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
-        return windows
-
-    if window_cfg.type == "fixed_days":
-        size = timedelta(days=window_cfg.size)
-        step = timedelta(days=window_cfg.step or window_cfg.size)
-        windows, cursor = [], start
-        while cursor < end:
-            w_end = min(cursor + size, end)
-            anchor_date = {"start": cursor, "end": w_end, "center": cursor + (w_end - cursor) / 2}[window_cfg.anchor]
-            windows.append(Window(cursor, w_end, anchor_date.strftime(window_cfg.label_format)))
-            cursor += step
-        return windows
+@dataclass(frozen=True)
+class Window:
+    start: date
+    end: date
+    label: str
+    scene_ids: tuple[str, ...] | None = None   # scene-mode pinning
 ```
 
-**Examples with a 2023-01-15 → 2023-06-30 range:**
+`generate_windows(start, end, type, size, step, anchor, label_format)` returns
+`list[Window]` for every type **except** `scene`, where it returns `None` — the
+sentinel value that tells the runner to call into `pipeline/scenes.py` instead.
 
-| Config | Windows produced |
+Window types:
+
+| Type | Notes |
 |---|---|
-| `type: fixed_days, size: 40, step: 40` | 2023-01-15, 2023-02-24, 2023-04-05, 2023-05-15, 2023-06-24 |
-| `type: fixed_days, size: 30, step: 10` | Overlapping 30-day windows every 10 days |
-| `type: calendar_month` | 2023-01, 2023-02, 2023-03, 2023-04, 2023-05, 2023-06 |
-| `type: full_range` | Single window: 2023-01-15 → 2023-06-30 |
-| `type: fixed_days, size: 16, step: 16` | Landsat revisit cycle |
+| `full_range` | One window covering `[start, end]` |
+| `calendar_year` | Jan 1 → Dec 31 per year, clipped to range |
+| `calendar_month` | 1st → last day of month, clipped to range |
+| `fixed_days` | `size` days per window, stepped by `step` (default = size). Windows are **whole** — a partial trailing window is dropped (`full_end > end → break`). |
+| `scene` | One window **per scene date**, populated from EE; carries `scene_ids` |
+
+Window labels come from `label_format` (strftime) applied to the anchor date.
+**No other module constructs folder/file names from dates.**
 
 ---
 
-## 8. ROI pipeline
+## 8. Scene mode (`pipeline/scenes.py`)
 
-### 8.1 Load + reproject
+EE-aware; not pure. Lives next to `compositor.py` so `windows.py` stays clean.
+
+Workflow when `composite.window.type: scene`:
+
+1. `enumerate_scenes(dataset_spec, roi_fc, start, end)` — fetches scene IDs and
+   acquisition timestamps from EE.
+2. If empty → `suggest_nearest_dates(...)` searches ±365 days, then ±730. Raises
+   `NoScenesAvailableError(dataset, requested, suggestions)` — the CLI catches it
+   and prints the suggestions as `date.start` / `date.end` candidates.
+3. If `cloud_mask.enabled` and `min_valid_coverage > 0`,
+   `scene_roi_coverage(...)` computes per-scene ROI cloud-free fraction via
+   `reduceRegion` at 10× native resolution. `filter_scenes_by_coverage(...)`
+   drops scenes below the threshold and logs each kept/dropped scene.
+4. If everything is dropped → `_suggest_cleaner_dates` (in `runner.py`) probes
+   nearby dates to find ones whose best scene clears the coverage bar (capped at
+   12 EE coverage calls), re-raises `NoScenesAvailableError` with that filtered
+   list.
+5. `scenes_to_windows(scenes, label_format)` groups scenes per date and emits
+   `Window(..., scene_ids=(...))`. `compositor.build_collection` sees `scene_ids`
+   and builds the collection from those exact assets (not date+bounds, which
+   would silently re-include rejected scenes).
+6. The runner forces `cfg.composite.strategy = "mosaic"` — single-scene days
+   "mosaic" to themselves; multi-scene days combine tile footprints across the
+   ROI (single S2 swaths rarely cover a province-sized AOI).
+
+Landsat 7 post-2003 with `type: scene` is rejected at validation time (single
+SLC-off scenes are heavily gapped — see §10).
+
+---
+
+## 9. ROI pipeline
+
+### 9.1 Load + reproject
 
 ```
-shapefile → GeoDataFrame → union/split/filter per feature_mode → reproject to auto-UTM
+shapefile → GeoDataFrame → feature_mode (union | split | filter) → reproject to auto-UTM
 ```
+
+`feature_mode: split` and `filter` are accepted in the schema; current
+implementation runs `union` semantics end-to-end (everything fuses into one ROI
+geometry before tiling). Per-feature output remains a v0.2 item — see §17.
 
 Auto-UTM is derived from the ROI centroid. All tiling and geometry math works in metres.
 
-### 8.2 Simplify before upload
+### 9.2 Simplify before upload
 
 ```python
 tolerance_m = resolution_m * 0.1   # 1 m for S2, 3 m for Landsat
-roi_simplified = roi.simplify(tolerance=tolerance_m, preserve_topology=True)
+simplified  = roi.simplify(tolerance=tolerance_m, preserve_topology=True)
 ```
 
 The original (unsimplified) geometry is used for local tile classification.
 The simplified geometry is what gets uploaded as the EE asset.
 
-### 8.3 EE asset upload
+### 9.3 EE asset upload
 
 ```
-hash(shapefile bytes) → deterministic asset ID
-  → check if asset exists in EE
-    → if yes: reuse (log reuse)
-    → if no:  upload as EE batch task → poll until COMPLETED
-→ store asset_id in checkpoint DB
-→ return ee.FeatureCollection(asset_id) reference
+sha1(shapefile bytes)[:10] → deterministic asset path
+  → check ee.data.getAsset(asset_id)
+    → yes: reuse, log reuse
+    → no:  upload + block until COMPLETED (raise on FAILED)
+→ persist asset_id in checkpoint DB
+→ return ee.FeatureCollection(asset_id)
 ```
 
-- Asset ID: `{base_path}/roi_{sha1[:10]}`
-- Upload blocks the job start — every downstream tile depends on it.
-- `auto_cleanup: true` deletes the asset after `post_job` hook completes.
-- A resumed job reads `asset_id` from the checkpoint DB and skips re-upload entirely.
+- Asset ID: `{cfg.asset.base_path}/roi_{sha1[:10]}`.
+- Asset upload blocks job start.
+- `auto_cleanup: true` deletes the asset after `post_job` finishes.
+- On resume: asset_id is read from the checkpoint DB; re-upload skipped entirely.
 
-### 8.4 Tiling
+### 9.4 Tiling (`roi/tiler.py` + `utils/budget.py`)
 
-**Tile size** back-calculated from pixel budget:
+Tile size is back-calculated from a **pixel budget** sized for EE's
+`computePixels` cap:
 
 ```python
-BUDGET_BYTES   = 40_000_000          # 40 MB (conservative vs 48 MB EE limit)
-HEADROOM       = 0.80                # 20% safety margin
-n_bands        = len(select) + len(indices)
-safe_pixels    = (BUDGET_BYTES / (n_bands * 4)) * HEADROOM
-tile_side_px   = int(safe_pixels ** 0.5)
-tile_side_m    = tile_side_px * resolution_m
+# utils/budget.py
+BUDGET_BYTES = 20_000_000   # 20 MB — sized to survive EE's worst-case 2.25×
+HEADROOM     = 0.80         # internal reprojection oversampling on multi-zone ROIs.
+                            # 20 MB * 0.8 * 2.25 ≈ 36 MB << 48 MB EE cap.
+
+def safe_tile_side_px(n_bands, bytes_per_pixel=4):
+    return int(((BUDGET_BYTES / (n_bands * bytes_per_pixel)) * HEADROOM) ** 0.5)
 ```
 
-**Grid origin** snapped to nearest `grid_snap_m` multiple north/west of bounding box.
-Same ROI + same resolution always produces identical tile boundaries across runs.
+`n_bands` is `len(bands.select) + len(indices)` — both contribute to the
+returned array's depth.
 
-**Tile classification:**
+`generate_tiles(...)` then:
 
-| Class | Condition | EE request | Server clip | Local mask |
+1. Computes `side_m = safe_tile_side_m(n_bands, resolution_m)`. If
+   `cfg.tiling.max_tile_bytes` is set, scales by `sqrt(max_tile_bytes / 40e6)`
+   (factor against the legacy 40 MB reference; not against the active 20 MB
+   budget — kept for backward CLI behaviour, never the default path).
+2. Floors at `resolution_m * 32` (no degenerate tiny tiles).
+3. Re-aligns to whole pixels.
+4. Snaps grid origin down to the nearest `grid_snap_m` multiple → same ROI +
+   same resolution always produces identical tile boundaries across runs.
+5. Walks cells, classifies, attaches Hilbert distance, sorts by it.
+
+**Tile classification (`_classify`):**
+
+| Class | Condition | EE request | Server clip (`img.clip`) | Local rasterio mask |
 |---|---|---|---|---|
-| `inside` | All 4 corners in ROI | Full tile rect | No | No |
-| `partial` | Mixed corners, coverage ≥ 5% | Tile rect + overlap buffer | Yes (`img.clip(roi_fc)`) | Yes (rasterio) |
-| `edge` | Mixed corners, coverage < 5% | — | — | — |
-| `outside` | All 4 corners outside ROI | — | — | — |
+| `inside` | All 4 corners in ROI | full tile rect + overlap | no | no |
+| `partial` | Mixed corners, coverage ≥ `skip_coverage_threshold` | full tile rect + overlap | yes | yes (to `tile.geom`, not the ROI — see writer) |
+| `edge` | Mixed corners, coverage < threshold | — | — | skipped (returned tile list omits this) |
+| `outside` | All 4 corners out **and** centroid out **and** no intersection | — | — | skipped |
 
-Coverage ratio: `tile.geom.intersection(roi).area / tile.geom.area`
+Coverage ratio: `tile.geom.intersection(roi).area / tile.geom.area`.
 
-The double-mask on `partial` tiles is intentional: EE clip saves bandwidth;
-local rasterio mask catches sub-pixel boundary drift from floating-point CRS transforms.
-
-**Tile ordering:** Hilbert space-filling curve. Spatially adjacent tiles fetched
-together → EE internal cache stays warm → measurably lower per-tile latency.
+**Why double-mask `partial`?** The EE clip saves bandwidth and trims the result
+to ROI bounds; the local rasterio pass catches sub-pixel boundary drift from
+floating-point CRS transforms. Local mask uses the **unbuffered** `tile.geom`
+(not the ROI) — the ROI lives server-side and the EE clip has already trimmed
+to the ROI boundary.
 
 **Overlap buffer:** Each tile's *request geometry* is expanded by
-`overlap_px × resolution_m` on all sides. Written tile is cropped to exact boundary.
-Prevents seam artefacts when tiles are later mosaicked.
+`overlap_px × resolution_m` on all sides. The writer crops the buffer off before
+emitting the final tile so seams disappear at merge time without duplicating pixels.
+
+**Tile ordering:** Hilbert space-filling curve. Spatially adjacent tiles
+download together → EE internal cache stays warm → lower per-tile latency.
+
+**Masked-pixel materialisation:** Before `computePixels`, the runner calls
+`image = image.unmask(cfg.output.nodata)`. Without it, EE would return `0` for
+cloud-masked / out-of-ROI / native-gap pixels regardless of the GeoTIFF nodata tag.
 
 ---
 
-## 9. Landsat 7 SLC-off handling
+## 10. Landsat 7 SLC-off handling
 
-**Strategy: `multi_temporal` (only supported strategy in geedl)**
+**Strategy: `multi_temporal` only.** No focal fill — it introduces blur that
+corrupts index calculations.
 
-Post-May 31 2003, Landsat 7's scan-line corrector failure leaves ~22% of each
-scene as nodata gaps (wedge-shaped stripes, worst at scene edges, zero at center).
+Mechanism:
 
-geedl handles this entirely through the standard compositing pipeline:
-
-1. The `landsat_qa_mask` function already flags SLC-off gap pixels as nodata
-   (they appear in `QA_PIXEL` as fill values). No special code path needed.
-2. The compositor stacks all available scenes within the time window and applies
-   `median` (or `mosaic`). With ≥ 3 scenes per window, gap positions differ
-   across orbits and the median fills ~97% of pixels naturally.
-3. The registry records `slc_off_date: "2003-05-31"`. The config validator
-   checks this at startup:
+1. `landsat_qa_mask` already flags SLC-off gap pixels as nodata via `QA_PIXEL`
+   fill bits. No special code path.
+2. The compositor stacks all in-window scenes and reduces them with `median`
+   (or `mosaic`). With ≥ 3 scenes per window, gap positions differ across orbits
+   and the median fills ~97% of pixels naturally.
+3. The registry records `slc_off_date: 2003-05-31` and
+   `slc_off_coverage_loss: 0.22`. `geedl validate` warns at job start:
 
 ```python
-def validate_slc_off(cfg, registry):
-    ds = registry[cfg.dataset.name]
-    if ds.slc_off_date and cfg.date.start > ds.slc_off_date:
-        # Estimate scenes per window from 16-day revisit cycle
-        approx_scenes = window_days / 16
-        if approx_scenes < cfg.dataset.slc_off.min_scenes_warning:
-            warn(
-                f"Landsat 7 SLC-off: window of {window_days} days yields "
-                f"~{approx_scenes:.1f} scenes. Gap fill needs >= "
-                f"{cfg.dataset.slc_off.min_scenes_warning} scenes. "
-                f"Consider widening the window or using Landsat 8/9."
-            )
-        if cfg.composite.window.type == "scene":
-            raise ConfigError(
-                "Landsat 7 post-2003 with strategy: none will produce heavily "
-                "gapped single-scene outputs. Use composite.strategy: median "
-                "with a window wide enough for >= 3 scenes."
-            )
+if ds.slc_off_date and cfg.date.start > ds.slc_off_date:
+    if cfg.composite.window.type == "scene":
+        raise BadParameter("L7 post-2003 with type=scene produces gapped output.")
+    if cfg.composite.window.type == "fixed_days":
+        approx = cfg.composite.window.size / 16
+        if approx < cfg.dataset.slc_off.min_scenes_warning:
+            warn(f"~{approx:.1f} scenes per window; widen or use L8/L9.")
 ```
 
-**Implications for window sizing with Landsat 7 post-2003:**
-
-| Window size | Approx. scenes | Gap fill quality |
+| Window size | Approx. scenes | Gap fill |
 |---|---|---|
 | 16 days | ~1 | Poor — raw gaps visible |
 | 32 days | ~2 | Moderate |
 | 48 days | ~3 | Good — ~97% coverage |
 | 64 days | ~4 | Excellent |
 
-The default `min_scenes_warning: 3` will warn the user if their chosen
-`fixed_days` size is too narrow. The fix is always to widen the window — never
-to use focal fill, which introduces blur that corrupts index calculations.
-
 ---
 
-## 10. Compositing pipeline
+## 11. Compositing pipeline (`pipeline/compositor.py`)
 
 ```python
-# compositor.py
-
-def build_collection(dataset_cfg, window: Window, roi_asset) -> ee.ImageCollection:
-    ds = registry[dataset_cfg.name]
-    col = (ee.ImageCollection(ds.collection)
-           .filterDate(window.start.isoformat(), window.end.isoformat())
-           .filterBounds(ee.FeatureCollection(roi_asset).geometry()))
-
-    # Apply any dataset-level extra filters (e.g. Sentinel-1 orbit mode)
-    for f in ds.extra_filters or []:
-        col = col.filter(ee.Filter.eq(f["property"], f["value"]))
-
-    # Apply cloud/shadow mask if enabled
-    if dataset_cfg.cloud_mask.enabled and ds.cloud_mask:
-        mask_fn = cloud_masks.get(ds.cloud_mask)
-        col = col.map(mask_fn)
-
-    return col
-
-def composite(col: ee.ImageCollection, strategy: str, dataset_name: str) -> ee.Image:
-    # Sentinel-1: override median → mosaic regardless of config
-    ds = registry[dataset_name]
-    effective_strategy = ds.get("composite_strategy_override", strategy)
-    if effective_strategy == "median":
-        return col.median()
-    if effective_strategy == "mosaic":
-        return col.mosaic()
-    raise ValueError(f"Unknown strategy: {effective_strategy}")
-
-def apply_bands_and_indices(image: ee.Image, dataset_cfg) -> ee.Image:
-    # Select bands
-    image = image.select(dataset_cfg.bands.select)
-
-    # Apply scale + offset
-    scale  = dataset_cfg.bands.scale_factor or registry[dataset_cfg.name].scale_factor
-    offset = dataset_cfg.bands.offset or registry[dataset_cfg.name].get("offset", 0)
-    image  = image.multiply(scale).add(offset)
-
-    # Compute and append indices
-    image = apply_indices(image, [i.name for i in dataset_cfg.indices], dataset_cfg.name)
-
-    # Reorder bands per config (select + indices combined, in declared order)
-    ordered_bands = _resolve_band_order(dataset_cfg)
-    image = image.select(ordered_bands)
-
-    # Rename
-    if dataset_cfg.bands.rename:
-        old = list(dataset_cfg.bands.rename.keys())
-        new = list(dataset_cfg.bands.rename.values())
-        image = image.select(old, new)  # EE select supports rename
-
-    return image
-
-def _resolve_band_order(dataset_cfg) -> list[str]:
-    """
-    Merge spectral bands and indices into a single ordered list,
-    respecting each index's declared position (after_bands | before_bands | int).
-    """
-    bands = list(dataset_cfg.bands.order or dataset_cfg.bands.select)
-    result = bands[:]
-    offset = 0
-    for idx_cfg in dataset_cfg.indices:
-        if idx_cfg.position == "after_bands":
-            result.append(idx_cfg.output_band or idx_cfg.name)
-        elif idx_cfg.position == "before_bands":
-            result.insert(0, idx_cfg.output_band or idx_cfg.name)
-        elif isinstance(idx_cfg.position, int):
-            result.insert(idx_cfg.position + offset, idx_cfg.output_band or idx_cfg.name)
-            offset += 1
-    return result
+def build_window_image(dataset_cfg, dataset_spec, strategy, window, roi_fc):
+    col = build_collection(dataset_cfg, dataset_spec, window, roi_fc)
+    composited = composite(col, strategy, dataset_spec)
+    return apply_bands_and_indices(composited, dataset_cfg, dataset_spec)
 ```
+
+`build_collection`:
+- If `window.scene_ids` is set → build from `ee.Image(f"{collection}/{sid}")` for each ID.
+- Else → `ImageCollection(...).filterDate(...).filterBounds(...)` then apply
+  every `extra_filter` from the registry (S1 orbit mode etc.).
+- Then `.map(mask_fn)` if cloud masking is enabled.
+
+`composite(col, strategy, spec)`:
+- `dataset_spec.composite_strategy_override` **wins** over the requested
+  strategy. Sentinel-1 always gets `mosaic` — no way to configure otherwise.
+- Supported: `median | mean | mosaic | none` (`none` returns `col.first()`).
+
+`apply_bands_and_indices`:
+- Select declared bands.
+- Apply `scale_factor` + `offset` only to bands flagged `scaled: true`. SCL /
+  QA_PIXEL keep integer codes.
+- Compute indices via `apply_indices` (declaration order).
+- Rename index output bands if `output_band != name`.
+- Reorder per `bands.order` + index `position` (`after_bands` | `before_bands` | int).
+- Apply `bands.rename` map last.
+- Returns `(image, ordered_band_names)`.
 
 ---
 
-## 11. Download pipeline
+## 12. Download pipeline (`pipeline/downloader.py` + `scheduler.py`)
 
-### 11.1 API call
+### 12.1 API call
 
-`ee.data.computePixels()` is used exclusively — returns raw bytes directly,
-no export task, no bucket, no Drive.
+`ee.data.computePixels()` — returns raw bytes; no export task, no bucket, no Drive.
 
 ```python
 params = {
     "expression": ee.serializer.encode(image),
-    "fileFormat": "NPY",          # numpy binary — fastest deserialization
-    "bandIds": ordered_band_list,
+    "fileFormat": "NPY",
+    "bandIds":   ordered_band_list,
     "grid": {
         "crsCode": f"EPSG:{tile_epsg}",
         "affineTransform": {
-            "scaleX": resolution_m,  "shearX": 0, "translateX": tile_origin_x,
-            "shearY": 0, "scaleY": -resolution_m,  "translateY": tile_origin_y,
+            "scaleX":  resolution_m,  "shearX": 0, "translateX": tile_origin_x,
+            "shearY":  0, "scaleY":  -resolution_m, "translateY": tile_origin_y,
         },
         "dimensions": {"width": tile_width_px, "height": tile_height_px},
     },
 }
-raw  = ee.data.computePixels(params)
-arr  = np.load(io.BytesIO(raw))   # shape: (height, width) structured array → bands
+raw = ee.data.computePixels(params)
+arr = np.load(io.BytesIO(raw))           # (height, width) structured → (bands, h, w)
 ```
 
-### 11.2 Concurrency model
+### 12.2 Concurrency model
 
-- `asyncio` event loop; `ee.data.computePixels` (sync) runs in `ThreadPoolExecutor`.
-- Global `asyncio.Semaphore(config.pipeline.concurrency)` caps simultaneous requests.
-- Default: **16**. Recommended maximum: **32** (EE quota ~40 concurrent).
-- Tile manifest is sorted by Hilbert index before being fed to `asyncio.as_completed`.
+- `asyncio` event loop coordinates work; `pipeline/scheduler.Scheduler` exposes:
+  - `run(items, worker)` — bounded by `asyncio.Semaphore(concurrency)`, fan-out via `asyncio.as_completed`.
+  - `run_blocking(fn, ...)` — dispatches sync EE calls to a `ThreadPoolExecutor(max_workers=concurrency)`.
+- Sync `computePixels` is **always** offloaded via `run_blocking` — never called inline.
+- Default concurrency: 16. EE quota guidance: ≤ 32 simultaneous.
+- A failing worker logs and swallows its exception so sibling tiles keep running;
+  the checkpoint records the failure.
 
-### 11.3 Retry logic
+### 12.3 Retry logic (`utils/retry.py`)
 
-Exponential backoff with full jitter. Retried on: HTTP 429, 500, 503, `ConnectionError`.
-Not retried on: HTTP 400 (bad params), 401/403 (auth) — these mark the tile `failed` immediately.
+Exponential backoff + full jitter, wrapped via `with_retry(coro, max_attempts, base_delay, retryable, label)`.
 
-```
-delay = uniform(0, min(base_delay * 2^attempt, 60))   seconds
-max_attempts: config.pipeline.max_retries (default 6)
-```
+| Error | Retried? |
+|---|---|
+| EE messages containing `rate limit / 429 / quota / too many` | yes (`RetryableError`) |
+| EE messages containing `500 / 502 / 503 / internal / timeout / deadline` | yes (`RetryableError`) |
+| `EmptyTileError` from validator | yes — empty array from EE may transiently happen |
+| `TileShapeError` | no — mark `failed`, log full params |
+| HTTP 400 / 401 / 403 / `ConfigError` / `AssetUploadError` | no — fail loud |
+
+All retries flow through `utils/retry.py` — never `time.sleep` or `asyncio.sleep` inline.
 
 ---
 
-## 12. Write pipeline
+## 13. Write pipeline
 
-### 12.1 Atomic write
+### 13.1 Two-stage output
 
-```
-download → validate → write to {tile_id}.tmp.tif → rename → checkpoint.mark_done()
-```
-
-`os.rename()` is atomic on POSIX. A crashed process never leaves a corrupt file
-at the real output path.
-
-### 12.2 Timeseries mode vs per-window mode
-
-**`timeseries_mode: false` (default)**
-
-```
-output/{dataset}/{window_label}/tile_{tile_id}.tif
-```
-
-One COG per tile per window. Bands are `[B2, B3, B4, B8, NDVI, EVI]` (as declared).
-
-**`timeseries_mode: true`**
-
-```
-output/{dataset}/tile_{tile_id}.tif   (one file, all windows stacked)
-```
-
-Band order: all bands for window 1, then window 2, etc., then all indices for
-window 1, window 2, etc. — controlled by `band_interleave` setting.
-Band names embedded in the GeoTIFF metadata as `{band}_{window_label}`.
-
-**`separate_indices: true`**
-
-Produces sibling files:
-```
-tile_{tile_id}_{window_label}_bands.tif
-tile_{tile_id}_{window_label}_indices.tif
-```
-
-### 12.3 Per-tile validation before write
-
-1. Array shape matches expected `(bands, height, width)`.
-2. Array is not all-nodata (EE returned empty — retry, don't write).
-3. Value range plausible for dataset (configurable soft check — warns, not fatal).
-
-### 12.4 Output format
-
-COG default: internally tiled at 256×256 blocks, LZW compression, overviews at 2×/4×/8×.
-Readable by QGIS, GDAL, stackstac, and any STAC browser without conversion.
-
----
-
-## 13. Output folder structure
+Downloaded tiles are **staged** under `output/.tmp/{dataset}/{window_label}/`
+(plus per-index sibling dirs `_NDVI/`, `_EVI/`, etc. when
+`separate_indices: true`). After every tile completes, the runner calls
+`_finalize_outputs` which uses `rasterio.merge` to mosaic each window's tiles
+into one COG per ROI/window:
 
 ```
 output/
   {dataset}/
-    {window_label}/            # e.g. "2023-01-15" or "2023-01" or "full"
-      tile_A01.tif
-      tile_A01.json            # STAC Item sidecar
-      tile_B02.tif
-      tile_B02.json
-  catalog.parquet              # spatial index of all completed tiles
-  job.yaml                     # verbatim copy of config used for this run
-  checkpoint.db                # SQLite resume state
+    {job_name}_{window_label}.tif         # merged main bands
+    {job_name}_{window_label}.json        # STAC sidecar (4326 footprint)
+    {job_name}_{window_label}_NDVI.tif    # one per separated index
+    {job_name}_{window_label}_NDVI.json
+  job.yaml                                # verbatim resolved config (after pydantic validation)
+  checkpoint.db
+  catalog.parquet                         # written once at end, never incrementally
 ```
 
-With `timeseries_mode: true`, the `{window_label}` level is absent —
-one file per tile at the dataset level.
+Merge step (`_merge_window`):
+
+1. `rasterio.merge` on all `.tif` in the window dir → in-memory mosaic.
+2. If `clip_geom` is given (always the ROI in the runner) → re-mask via
+   `MemoryFile` + `rasterio.mask` to crop tightly to the ROI boundary.
+3. Apply compression / COG profile, write to `{final}.tmp`, build overviews,
+   `os.rename` to final path.
+4. `_finalize_outputs` removes the `.tmp` staging tree on success.
+
+STAC sidecars for the **merged** outputs are written from `_finalize_outputs`
+in EPSG:4326 (via `pyproj.Transformer`); the per-tile sidecars written by
+`_process_tile` describe each staging tile (kept in `.tmp` and discarded along
+with it). The catalog parquet is built from the final sidecars only.
+
+### 13.2 Atomic write (`io/writer.py`)
+
+```
+download → validate → write to {path}.tmp → (COG) build_overviews → close → os.rename(tmp, final)
+```
+
+`os.rename()` is atomic on POSIX. A crashed process leaves at most a `.tmp` file
+— never a corrupt final file.
+
+The writer also:
+- Crops the `overlap_px` buffer off the array and shifts the transform.
+- Applies `mask_geom` (when given) with `rasterio.features.geometry_mask`.
+- Casts to the target `dtype` and applies `nodata`.
+- Embeds per-band names as GeoTIFF band descriptions.
+
+### 13.3 Per-tile validation (`pipeline/validator.py`)
+
+1. Array shape matches `(bands, height, width)` — else `TileShapeError`.
+2. Array is not all-nodata — else `EmptyTileError` (retried).
+3. Value range plausible — log-only soft check.
+
+### 13.4 Output structure flags
+
+| Flag | Effect |
+|---|---|
+| `separate_indices: true` (default) | Spectral bands and each index go to sibling files: `..._{window}.tif`, `..._{window}_{IDX}.tif` |
+| `separate_indices: false` | All bands + indices in one file per window |
+| `timeseries_mode: true` | Reserved in schema; not part of the current finalize path |
+| `band_interleave` | Carried in schema; writer always sets `interleave="pixel"` (BIP) |
+
+### 13.5 Output format
+
+COG by default: 256×256 internal tiles, LZW compression, overviews `2×/4×/8×`
+with average resampling. Readable by QGIS, GDAL, stackstac, and any STAC client.
 
 ---
 
-## 14. Checkpoint & resume system
+## 14. Checkpoint & resume (`io/checkpoint.py`)
 
-### 14.1 Schema
+### 14.1 Schema (SQLite + WAL)
 
 ```sql
 CREATE TABLE job (
@@ -779,150 +643,212 @@ CREATE TABLE job (
 );
 
 CREATE TABLE tiles (
-  id            TEXT PRIMARY KEY,   -- "{tile_grid_id}_{window_label}"
-  status        TEXT NOT NULL,      -- pending | in_flight | done | failed
+  id            TEXT PRIMARY KEY,    -- "{tile_grid_label}_{window_label}"
+  status        TEXT NOT NULL,       -- pending | in_flight | done | failed
   attempts      INTEGER DEFAULT 0,
   last_error    TEXT,
   output_path   TEXT,
   completed_at  REAL
 );
+CREATE INDEX ix_tiles_status ON tiles(status);
 ```
 
 ### 14.2 Tile ID
 
-Tile IDs encode both the grid position and the time window:
-`{col_letter}{row_number}_{window_label}` → e.g. `A01_2023-01-15`, `B03_full`.
-
-This means a job with 50 spatial tiles and 5 windows has 250 checkpointable units.
-Each unit is independently resumable.
+`{col_letter}{row:02d}_{window_label}` → e.g. `A01_2023-01-15`, `B03_full`.
+A job with 50 spatial tiles × 5 windows has 250 independently resumable units.
 
 ### 14.3 State machine
 
 ```
 pending → in_flight → done
-                    ↘ failed   (after max_retries; re-queued with --retry-failed)
+                    ↘ failed   (after max_retries; --retry-failed re-queues)
 ```
 
-On startup:
-- `in_flight` → reset to `pending`, delete output file if it exists.
-- `done` → skipped.
-- `failed` → skipped unless `--retry-failed`.
+`claim(id)` atomically moves `pending|failed → in_flight` and bumps `attempts`.
+`mark_done()` may be called **only after** `os.rename` to the final path
+returns successfully.
 
-Config hash mismatch → warning + confirmation prompt before proceeding.
+### 14.4 Crash recovery
 
-### 14.4 CLI resume interface
+On startup, `recover_from_crash`:
+- Lists every `in_flight` row.
+- Deletes both `output_path` and `{output_path}.tmp` if they exist.
+- Resets all `in_flight → pending`.
+
+### 14.5 Config hash
+
+`JobConfig.config_hash()` = `sha1` of the **canonical** YAML serialisation of
+the resolved, validated config (`yaml.safe_dump(self.model_dump(mode="json"), sort_keys=True)`).
+A mismatch against the stored hash means the job's intent has changed; treat as
+a new job (the CLI offers `--fresh`).
+
+### 14.6 CLI
 
 ```bash
-geedl run    --config job.yaml                # run or resume
-geedl run    --config job.yaml --retry-failed # also retry failed tiles
-geedl run    --config job.yaml --fresh        # ignore checkpoint, start over
-geedl status --config job.yaml               # show done/pending/failed counts
-geedl plan   --config job.yaml               # dry run: print tile manifest
-geedl validate --config job.yaml             # validate config only
-geedl datasets                               # list available dataset slugs
-geedl indices --dataset sentinel-2           # list available indices
-geedl cleanup --config job.yaml              # delete EE asset for this job
+geedl run      --config job.yaml                # run or resume
+geedl run      --config job.yaml --retry-failed # also retry tiles in 'failed'
+geedl run      --config job.yaml --fresh        # ignore checkpoint, start over
+geedl validate --config job.yaml                # validate config + SLC-off / index guards
+geedl status   --config job.yaml                # show done/pending/failed counts
+geedl plan     --config job.yaml                # dry run; print windows + dataset info
+geedl datasets                                  # list registry slugs
+geedl indices  --dataset sentinel-2             # list indices supported for a dataset
+geedl cleanup  --config job.yaml                # delete the EE ROI asset for this job
 ```
 
 ---
 
-## 15. STAC catalog
+## 15. Progress reporting
 
-Each tile gets a JSON sidecar (STAC Item 1.0):
+`runner.py` owns the tqdm bars; nothing else touches them.
+
+- One **overall** bar at `position=0` with total `len(pending_units)`.
+- One **per-window** bar at `position=i` (sorted by window label), `leave=False`.
+- `_bump_progress(progress, window_label, *, failed)` is the **only** entry point
+  for updates. Called from every tile-terminal path in `_process_tile`:
+  success, EmptyTileError (giving up after retries), TileShapeError, retry
+  exhaustion. Failed-tile count is tracked outside tqdm and surfaced via
+  `set_postfix_str("failed=N")` on the overall bar.
+- All bars are closed in a `finally` block around `scheduler.run`.
+
+This keeps progress out of the scheduler (which stays generic) and out of every
+other module (which stays unaware of UI).
+
+---
+
+## 16. Authentication (`utils/auth.py`)
+
+`ee.Initialize` is called from **exactly one place**:
+
+```python
+def initialize_ee(cfg: JobConfig) -> None:
+    if cfg.auth.method == "service_account":
+        creds = ee.ServiceAccountCredentials(cfg.auth.service_account_email, cfg.auth.key_file)
+        ee.Initialize(credentials=creds, project=cfg.asset.project)
+    else:
+        ee.Initialize(project=cfg.asset.project)
+```
+
+Callers: `pipeline/runner._run` at job start; `cli.cleanup` before deleting the
+asset. The pydantic `AuthConfig` validator rejects
+`method: service_account` without both `service_account_email` and `key_file`,
+so missing credentials surface at config-parse time, never inside EE code.
+
+---
+
+## 17. Output folder structure (current)
+
+```
+output/
+  {dataset}/
+    {job_name}_{window_label}.tif
+    {job_name}_{window_label}.json
+    {job_name}_{window_label}_{INDEX}.tif    # one per index when separate_indices=true
+    {job_name}_{window_label}_{INDEX}.json
+  job.yaml
+  checkpoint.db
+  catalog.parquet                            # at job completion only
+```
+
+Per-tile staging happens under `output/.tmp/{dataset}/{window_label}/` and is
+removed once `_finalize_outputs` succeeds for that job.
+
+---
+
+## 18. STAC catalog
+
+`io/catalog.py` writes STAC Item 1.0 JSON sidecars (one per merged GeoTIFF).
+Custom fields use the `geedl:` prefix (`geedl:tile_class`, `geedl:coverage`,
+`geedl:window_type`, `geedl:derived`, …).
 
 ```json
 {
   "type": "Feature",
   "stac_version": "1.0.0",
-  "id": "tile_A01_2023-01-15",
-  "geometry": {"type": "Polygon", "coordinates": [...]},
-  "bbox": [minx, miny, maxx, maxy],
+  "id": "{job_name}_{window_label}",
+  "geometry": { ... ROI footprint in EPSG:4326 ... },
+  "bbox": [...],
   "properties": {
     "datetime": "2023-01-15T00:00:00Z",
-    "start_datetime": "2023-01-15T00:00:00Z",
-    "end_datetime": "2023-02-24T00:00:00Z",
+    "start_datetime": "...",
+    "end_datetime": "...",
     "platform": "sentinel-2",
     "gsd": 10,
-    "eo:bands": [...],
-    "geedl:tile_class": "inside",
-    "geedl:attempts": 1,
-    "geedl:window_type": "fixed_days",
-    "geedl:window_size_days": 40
+    "eo:bands": [{"name": "B2"}, {"name": "B3"}, ...],
+    "geedl:window_type": "fixed_days"
   },
-  "assets": {
-    "data": {
-      "href": "./tile_A01_2023-01-15.tif",
-      "type": "image/tiff; application=geotiff; profile=cloud-optimized"
-    }
-  }
+  "assets": { "data": { "href": "...", "type": "image/tiff; ... profile=cloud-optimized" } }
 }
 ```
 
-After the job completes, `catalog.parquet` aggregates all tile footprints:
+`catalog.parquet` aggregates all final sidecars. Sample:
 
 ```python
 gdf = gpd.read_parquet("output/catalog.parquet")
-gdf[gdf.window_label == "2023-01-15"].plot()
+gdf[gdf.tile_id.str.endswith("2023-01")].plot()
 ```
 
 ---
 
-## 16. Key design decisions — consolidated
+## 19. Key design decisions — consolidated
 
 | # | Decision | Choice | Rationale |
 |---|---|---|---|
-| 1 | Project name | `geedl` | Short, memorable, unambiguous |
-| 2 | ROI delivery to EE | Upload as EE asset once per job | Eliminates repeated JSON payload per tile; enables server-side clip by reference |
-| 3 | Asset ID strategy | SHA1 of shapefile bytes → deterministic path | Same file reuses existing asset; different files never collide |
-| 4 | Geometry simplification | 10% of resolution before upload | Sub-pixel precision is meaningless; reduces asset size and parse time |
-| 5 | Tile size derivation | Back-calculated from pixel budget | Always safe; auto-adapts to band count and resolution |
-| 6 | Tile classification | inside / partial / edge / outside | Eliminates EE requests for empty space; largest single speed win |
-| 7 | Coverage threshold | Skip tiles < 5% ROI coverage | Not worth EE compute cost for nearly-empty border tiles |
-| 8 | Server-side clip | Only for `partial` tiles | `inside` tiles waste EE compute; `edge`/`outside` are skipped |
-| 9 | Local mask | Always applied to `partial` tiles | Safety net for sub-pixel CRS boundary drift after EE clip |
-| 10 | Tile ordering | Hilbert space-filling curve | Spatial locality → EE cache warmth → measurably lower per-tile latency |
-| 11 | Concurrency | Async semaphore, default 16 | Stays well under EE quota (~40); tune per project |
+| 1 | Name | `geedl` | Short, memorable |
+| 2 | ROI delivery to EE | Upload as EE asset once per job | Eliminates per-tile JSON payload; enables server-side clip by reference |
+| 3 | Asset ID | sha1 of shapefile bytes → deterministic path | Same file reuses existing asset; different files never collide |
+| 4 | Geometry simplification | 10% of native resolution before upload | Sub-pixel precision is meaningless; reduces upload + parse time |
+| 5 | Tile size | Back-calculated from 20 MB pixel budget | Safe under EE's 48 MB cap + 2.25× worst-case reprojection oversampling |
+| 6 | Tile classification | inside / partial / edge / outside | Eliminates EE requests for empty space — largest single speed win |
+| 7 | Coverage threshold | Skip tiles < 5% ROI coverage | Not worth EE compute for nearly-empty borders |
+| 8 | Server-side clip | `partial` tiles only | `inside` would waste EE compute; `edge`/`outside` are skipped entirely |
+| 9 | Local mask | Always applied to `partial` tiles | Safety net for sub-pixel CRS boundary drift |
+| 10 | Tile ordering | Hilbert space-filling curve | EE cache warmth; lower per-tile latency |
+| 11 | Concurrency | Async semaphore + thread pool, default 16 | Comfortably under EE quota (~40); tune per project |
 | 12 | Retry strategy | Exponential backoff + full jitter | Prevents thundering herd on rate-limit bursts |
-| 13 | Write safety | Write-to-tmp, then atomic `os.rename` | Crash never leaves corrupt file at real output path |
-| 14 | Resume model | SQLite; reset `in_flight` on startup | Full idempotency; safe to kill at any point |
-| 15 | Download API | `computePixels` exclusively | Local-first; no GCS/Drive dependency whatsoever |
-| 16 | Wire format | NPY (numpy binary) | Fastest deserialization; skips image codec entirely |
-| 17 | Output format | COG by default | QGIS/GDAL/stackstac native; spatially queryable without full read |
-| 18 | Time windows | Flexible `window` block in config | Supports fixed-day, calendar-month, overlapping, and scene modes |
-| 19 | Window label | `label_format` strftime on anchor date | Unambiguous folder names regardless of window shape or size |
-| 20 | Timeseries mode | `structure.timeseries_mode` flag | Stack-all vs per-window is a YAML decision, not a code path |
-| 21 | Band order | Explicit `bands.order` key in config | Agent-addressable without touching Python |
-| 22 | Band rename | `bands.rename` map in config | Cross-dataset normalization via YAML |
-| 23 | Index position | `position` per index entry | Band ordering fully declarative |
-| 24 | Index extensibility | `@index` decorator, no core changes | Community additions are single-function additions |
-| 25 | Sentinel-1 compositing | Registry-level `composite_strategy_override: mosaic` | Median is meaningless for SAR backscatter; enforced automatically |
-| 26 | Landsat 7 SLC-off | Strategy `multi_temporal` only | QA mask + median compositor fills gaps naturally at ≥ 3 scenes; no blur, no special code path |
-| 27 | SLC-off guard | Config validator warns if window too narrow | User gets actionable feedback at startup, not corrupt output at the end |
-| 28 | Config identity | SHA1 hash gates checkpoint reuse | Prevents silently resuming the wrong job after config change |
-| 29 | Checkpoint granularity | `{tile_grid_id}_{window_label}` | Each spatial × temporal unit is independently resumable |
-| 30 | AI agent interface | YAML is complete job spec; hooks for custom callables | Agents can refactor jobs, swap datasets, change output shapes without reading Python |
+| 13 | Write safety | `.tmp` → atomic `os.rename` | Crash never leaves corrupt file at real path |
+| 14 | Resume model | SQLite (WAL); `in_flight` reset on startup | Full idempotency; safe to kill at any point |
+| 15 | Download API | `computePixels` exclusively | Local-first; no GCS/Drive dependency |
+| 16 | Wire format | NPY (numpy binary) | Fastest deserialization; no image codec |
+| 17 | Output format | COG by default | QGIS/GDAL/stackstac native |
+| 18 | Two-stage output | Stage to `.tmp/` then `rasterio.merge` per window | One COG per ROI/window beats N partial tiles for downstream tooling |
+| 19 | Mask materialisation | `image.unmask(nodata)` before `computePixels` | Without it, EE emits 0 for masked pixels regardless of nodata tag |
+| 20 | Scene mode | `windows.py` returns `None`; runner delegates to `scenes.py` | Keeps `windows.py` pure and credential-free |
+| 21 | Scene-mode pinning | `Window.scene_ids` carries exact IDs | Coverage-filtered scenes are not re-derived by date+bounds |
+| 22 | Window label | `label_format` strftime on anchor | Folder names unambiguous regardless of window shape |
+| 23 | Band order | `bands.order` + per-index `position` | Fully declarative; no Python edit needed |
+| 24 | Index extensibility | `@index` decorator; no core changes | Adding an index = adding one function |
+| 25 | S1 compositing | Registry-level `composite_strategy_override: mosaic` | Median meaningless for SAR backscatter; enforced automatically |
+| 26 | L7 SLC-off | `multi_temporal` only; validated at job start | Median compositor fills gaps at ≥ 3 scenes; no focal blur |
+| 27 | Config identity | sha1 over canonical YAML of resolved config | Prevents silently resuming wrong job |
+| 28 | Checkpoint granularity | `{tile_grid_label}_{window_label}` | Each spatial × temporal unit resumable |
+| 29 | Auth | `auth.method: browser | service_account`; single `initialize_ee` call site | Switchable without touching code |
+| 30 | Progress | tqdm overall + per-window; updated via `_bump_progress` only | UI concern isolated to the runner |
+| 31 | AI agent interface | YAML is complete job spec; hooks via `"module:fn"` | Agents refactor jobs by editing config alone |
 
 ---
 
-## 17. Known limitations & future work
+## 20. Known limitations & future work
 
-**v0.1 scope limits (by design):**
+**v0.2 scope:**
 
-- **Single machine only.** Async pipeline is single-process. A Celery/Ray backend
-  is architecturally compatible (tile manifest + checkpoint DB are the right
-  abstraction) but out of scope for v0.1.
-- **Landsat 7 SLC-off:** Only `multi_temporal` strategy supported. `focal_fill`
-  is explicitly excluded — it introduces blur that corrupts index calculations.
-- **No per-feature output in `feature_mode: union`.** Multiple shapefile features
-  are merged. Feature-level subfolders planned for v0.2.
-- **No GUI.** CLI only. A FastAPI + htmx progress dashboard is a natural v0.3 addition.
+- **Single machine.** Async pipeline is one process. A Celery/Ray backend is
+  architecturally compatible (tile manifest + checkpoint DB are the right
+  abstraction) but out of scope.
+- **`feature_mode: split` / `filter` accepted in schema, not yet wired through
+  the runner.** All features are unioned today. Per-feature output is a v0.3 item.
+- **Landsat 7 SLC-off:** `multi_temporal` only. `focal_fill` is explicitly
+  excluded — it blurs and corrupts index calculations.
+- **No GUI.** CLI only. A FastAPI + htmx dashboard is a plausible v0.4 addition.
+- **`timeseries_mode` is in the schema but not wired through the finalize
+  step.** Per-window mosaics are written; multi-window stacking remains future work.
 
-**Known data quality caveats (documented, not fixed):**
+**Known data caveats:**
 
-- Very narrow windows with Landsat 7 post-2003 will have residual gaps even after
-  compositing. The validator warns; the user must widen the window or switch to L8/L9.
-- Sentinel-1 `mosaic` composite takes the first-valid pixel; for backscatter analysis
-  users may prefer to handle multi-temporal averaging themselves via the `post_tile` hook.
-- Landsat Collection 2 scaling (`× 0.0000275 − 0.2`) is applied by default.
-  If the user selects `dtype: int16`, values will be rounded post-scaling — warn
-  in validator if `scale_factor != null` and `dtype` is integer.
+- Very narrow windows with L7 post-2003 will have residual gaps even after
+  compositing. `geedl validate` warns; the user must widen the window or use L8/L9.
+- Sentinel-1 `mosaic` takes the first valid pixel; for true multi-temporal
+  backscatter averaging users should reduce themselves via the `post_tile` hook.
+- Landsat C2 scaling (`× 0.0000275 − 0.2`) is applied by default. With
+  `dtype: int16` values round after scaling — `geedl validate` warns.
