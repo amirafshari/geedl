@@ -245,7 +245,10 @@ hooks:
 ```bash
 pytest                       # full unit + integration suite (~2s, no EE calls)
 pytest --live                # also runs the opt-in EE smoke tests
-                             #   requires: export GEEDL_TEST_EE_PROJECT=<your-proj>
+                             #   requires: GEEDL_TEST_EE_PROJECT=ee-tat3 \
+                             #   GEEDL_TEST_EE_KEY=/credentials.json \
+                             #   pytest tests/test_live_smoke.py --live
+GEEDL_TEST_EE_PROJECT=ee-tat3 GEEDL_TEST_EE_KEY=ee-tat3-835f3bd207eb.json pytest --live 
 pytest tests/test_indices_matrix.py -v   # one module
 ```
 

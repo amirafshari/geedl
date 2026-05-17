@@ -32,7 +32,13 @@ def ee_initialized() -> None:
     project = os.environ.get("GEEDL_TEST_EE_PROJECT")
     if not project:
         pytest.skip("Set GEEDL_TEST_EE_PROJECT to run live tests.")
-    ee.Initialize(project=project)
+    key_file = os.environ.get("GEEDL_TEST_EE_KEY")
+    if key_file:
+        sa_email = os.environ.get("GEEDL_TEST_EE_SERVICE_ACCOUNT")
+        credentials = ee.ServiceAccountCredentials(sa_email, key_file)
+        ee.Initialize(credentials=credentials, project=project)
+    else:
+        ee.Initialize(project=project)
 
 
 # (slug, window) — small ranges chosen for likely scene coverage.
