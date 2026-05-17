@@ -1,39 +1,98 @@
+# Unique name for this job (used in logs, checkpoint DB, catalog).
 job_name: sentinel1_test
 
 roi:
+  # Path to shapefile (.shp, .geojson, .gpkg).
   path: shahrestan/shahrestan.shp
+  # layer: null                       # Optional layer name for multi-layer files.
+  # feature_mode: union               # How to combine features: union | split | filter.
+  # filter_expr: null                 # Pandas query string used when feature_mode='filter'.
+  # simplify_tolerance: auto          # Simplification tolerance in metres, or 'auto' = 10% of resolution.
 
 dataset:
+  # Dataset slug from registry.yaml.
   name: sentinel-1
   bands:
+    # Bands to keep (null = all in registry).
     select: [VV, VH]
+    # order: null                     # Explicit output band order.
+    # rename: null                    # Rename map applied after download.
+    # scale_factor: null              # Scale factor (null = registry default).
+    # offset: 0.0                     # Additive offset applied after scale.
+  # indices: []                       # List of spectral indices to compute (e.g. NDVI).
+  # cloud_mask:
+  #   enabled: true
+  #   profile: auto                   # Mask profile name, or 'auto' for registry default.
+  #   mask_shadow: true
+  #   mask_snow: false
+  # slc_off:
+  #   strategy: multi_temporal        # SLC-off handling strategy (Landsat 7 only).
+  #   min_scenes_warning: 3           # Warn if a window has fewer scenes than this.
 
 date:
+  # Inclusive date range (YYYY-MM-DD).
   start: "2022-04-22"
   end: "2022-06-22"
 
 composite:
+  # Compositing reducer: median | mean | mosaic | none.
   strategy: mean
   window:
+    # Window type: fixed_days | calendar_month | calendar_year | full_range | scene.
     type: fixed_days
+    # Window length in days (fixed_days only).
     size: 30
+    # Step in days between windows (null = same as size; smaller = overlapping windows).
     step: 30
+    # anchor: start                   # Where to anchor the label date: start | end | center.
+    # min_scenes: 1                   # Minimum scenes required per window.
+    # strftime format used to label window folders/filenames.
     label_format: "%Y-%m-%d"
 
 pipeline:
+  # Max concurrent tile downloads.
   concurrency: 16
+  # max_retries: 6                    # Retry budget per tile for transient errors.
+  # retry_base_delay: 1.0             # Base seconds for exponential backoff.
+  # timeout_per_tile: 120             # Per-tile timeout in seconds.
 
 output:
+  # Output root directory.
   dir: ./output
+  # Output format: COG | GeoTIFF.
   format: COG
+  # Pixel dtype: float32 | int16 | uint16.
   dtype: float32
+  # nodata: -9999.0
+  # crs: null                         # EPSG code, or null for auto-UTM from ROI centroid.
+  # compression: LZW                  # LZW | DEFLATE | ZSTD | none.
+  # structure:
+  #   timeseries_mode: false          # Stack all windows into one multi-band file per tile.
+  #   band_interleave: BIP            # BIP | BIL | BSQ.
+  #   filename_template: "tile_{tile_id}_{window_label}"
+  #   separate_indices: false         # Write each index to its own file.
+
+# tiling:
+#   max_tile_bytes: null              # Override pixel budget per tile (null = auto from EE 50MB limit).
+#   overlap_px: 2                     # Pixels added to each tile request to avoid edge seams.
+#   skip_coverage_threshold: 0.05     # Tiles covering less than this fraction of the ROI are dropped.
+#   grid_snap_m: 100                  # Snap tile grid origin to this multiple, in metres.
 
 asset:
+  # EE project ID or username.
   project: ee-tat3
+  # EE asset folder for ROI uploads.
   base_path: projects/ee-tat3/assets
+  # auto_cleanup: false               # Delete uploaded ROI asset after the job completes.
 
 auth:
-  method: service_account          # or service_account or browser
-  # required only for service_account:
+  # Authentication method: 'browser' (Application Default Credentials) or 'service_account' (JSON key).
+  method: service_account
+  # Required only when method='service_account':
   service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
   key_file: ee-tat3-835f3bd207eb.json
+
+# hooks:
+#   pre_download: null                # "module.path:function_name" — runs before each tile download.
+#   post_tile: null                   # Runs after each tile is written successfully.
+#   post_job: null                    # Runs once after all tiles complete.
