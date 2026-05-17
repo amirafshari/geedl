@@ -38,7 +38,7 @@ fails. **geedl skips all of that.**
 - **Direct download from Earth Engine** via `ee.data.computePixels()` — no GCS, no Drive.
 - **Shapefile ROI support** — auto-projects to UTM, simplifies for upload, tiles intelligently.
 - **Smart tiling** — classifies tiles as `inside`, `partial`, or `outside`; skips empty space; orders by **Hilbert curve** for cache-warm EE requests.
-- ⏱**Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes.
+- **Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes.
 - **Spectral indices** — built-in NDVI, EVI, NDWI, NDMI, NBR, NDSI, SAVI, BSI, RVI, VV/VH ratio. Add your own with one decorated function.
 - **Crash-safe & resumable** — every tile is checkpointed; atomic writes (`.tmp` → `os.rename`) guarantee no corrupt files on disk.
 - **Cloud masking** built in — Sentinel-2 SCL, Landsat C2 `QA_PIXEL`. Cloud + shadow + snow toggles per job.
