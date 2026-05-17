@@ -36,6 +36,12 @@ from ..utils.auth import initialize_ee
 from ..utils.retry import RetryableError, with_retry
 from ..utils.windows import Window, generate_windows
 from . import compositor, downloader, validator
+from .scenes import (
+    NoScenesAvailableError,
+    enumerate_scenes,
+    scenes_to_windows,
+    suggest_nearest_dates,
+)
 from .scheduler import Scheduler
 
 log = logging.getLogger(__name__)
@@ -261,8 +267,21 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
         label_format=cfg.composite.window.label_format,
     )
     if windows is None:
-        raise NotImplementedError("scene mode is not yet implemented in runner")
-    log.info("generated %d windows", len(windows))
+        scenes = enumerate_scenes(dataset_spec, roi_fc, cfg.date.start, cfg.date.end)
+        if not scenes:
+            target = cfg.date.start
+            suggestions = suggest_nearest_dates(dataset_spec, roi_fc, target)
+            raise NoScenesAvailableError(
+                cfg.dataset.name, (cfg.date.start, cfg.date.end), suggestions
+            )
+        windows = scenes_to_windows(scenes, cfg.composite.window.label_format)
+        # Each synthetic window holds exactly one day; force `none` so the
+        # composite returns the single scene (col.first()). Sentinel-1 keeps
+        # its registry-level `mosaic` override automatically.
+        cfg.composite.strategy = "none"
+        log.info("scene mode: %d scenes → %d windows", len(scenes), len(windows))
+    else:
+        log.info("generated %d windows", len(windows))
 
     output_root = Path(cfg.output.dir)
     output_root.mkdir(parents=True, exist_ok=True)

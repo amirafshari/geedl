@@ -16,6 +16,7 @@ from .datasets.registry import list_slugs
 from .indices import list_indices
 from .io.checkpoint import Checkpoint
 from .pipeline.runner import run_job
+from .pipeline.scenes import NoScenesAvailableError
 from .utils.windows import generate_windows
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="Local-first GEE downloader.")
@@ -36,7 +37,15 @@ def run(
     """Run or resume a download job."""
     _setup_logging(verbose)
     cfg = load_config(config)
-    run_job(cfg, fresh=fresh, retry_failed=retry_failed)
+    try:
+        run_job(cfg, fresh=fresh, retry_failed=retry_failed)
+    except NoScenesAvailableError as exc:
+        typer.echo(str(exc), err=True)
+        if exc.suggestions:
+            typer.echo("\nTry one of these dates in date.start / date.end:", err=True)
+            for d in exc.suggestions:
+                typer.echo(f"  {d.isoformat()}", err=True)
+        raise typer.Exit(code=2)
 
 
 @app.command()
