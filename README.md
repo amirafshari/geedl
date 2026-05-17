@@ -366,6 +366,12 @@ Issues and PRs welcome. The codebase has a strict layered dependency graph
 index engine — see [`CLAUDE.md`](.claude/CLAUDE.md) for module contracts and
 testing conventions before opening a PR.
 
+The project leans hard on **minimalism and anti-overengineering**: prefer
+editing existing modules over adding new ones, no speculative abstractions, no
+backwards-compat shims, no defensive scaffolding inside trust boundaries, and
+comments only where the *why* is non-obvious. See the "Engineering ethos"
+section of `CLAUDE.md` for the full rules.
+
 ---
 
 ## License

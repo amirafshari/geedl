@@ -57,6 +57,40 @@ These are hard rules. Do not work around them, do not ask if they apply.
 
 ---
 
+## Engineering ethos
+
+Modular, clean, minimal, optimized. **No overengineering.** Apply on every change:
+
+- **Prefer editing over creating.** Don't add a new file/module/class if an
+  existing one fits. Three similar lines beat a premature abstraction.
+- **Build for the task, not the hypothetical.** No speculative flags, no
+  "might need later" config knobs, no extension points without a second caller.
+- **No defensive scaffolding inside trust boundaries.** Validate at the YAML
+  edge (config schema) and at the EE/IO edge. Trust internal callers — skip
+  redundant `isinstance` checks, fallback branches, and try/except that just
+  re-raises.
+- **No backwards-compatibility shims.** Change call sites; don't leave
+  deprecated wrappers, alias re-exports, or `# removed` comments.
+- **No dead code.** Delete unused params, helpers, and imports rather than
+  prefixing with `_` or leaving TODOs.
+- **Comments earn their keep.** Default to none. Write one only when the *why*
+  is non-obvious (a workaround, an EE quirk, a checkpoint invariant). Never
+  restate the code.
+- **One concern per module.** If a function needs to know about both EE and the
+  filesystem, it belongs in `pipeline/` — not in `utils/` or `datasets/`.
+- **Pure where possible.** `utils/windows.py`, `roi/tiler.py` classification,
+  `pipeline/compositor.generate_windows()` stay free of I/O, logging, and EE
+  calls so they remain trivially testable.
+- **Optimize only with evidence.** Don't add caching, batching, or parallelism
+  layers until a profile or a failing job demands them. The existing semaphore
+  + thread pool is the concurrency story — don't bolt on another.
+- **One way to do a thing.** If two code paths converge on the same outcome,
+  pick one and delete the other. Same for two config fields that overlap.
+
+When in doubt: write less. A reviewer should be able to justify every line.
+
+---
+
 ## Repository layout
 
 ```
