@@ -18,6 +18,8 @@ class BandSpec:
     name: str
     desc: str
     res: int
+    scaled: bool = True
+    internal: bool = False
 
 
 @dataclass(frozen=True)
@@ -35,13 +37,19 @@ class DatasetSpec:
     extra_filters: list[dict[str, Any]] = field(default_factory=list)
     composite_strategy_override: str | None = None
 
-    def band_names(self) -> list[str]:
-        return list(self.bands.keys())
+    def band_names(self, include_internal: bool = False) -> list[str]:
+        return [n for n, b in self.bands.items() if include_internal or not b.internal]
 
 
 def _parse_entry(slug: str, raw: dict[str, Any]) -> DatasetSpec:
     bands = {
-        name: BandSpec(name=name, desc=spec["desc"], res=int(spec["res"]))
+        name: BandSpec(
+            name=name,
+            desc=spec["desc"],
+            res=int(spec["res"]),
+            scaled=bool(spec.get("scaled", True)),
+            internal=bool(spec.get("internal", False)),
+        )
         for name, spec in raw["bands"].items()
     }
     slc_off_raw = raw.get("slc_off_date")

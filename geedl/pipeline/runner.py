@@ -182,13 +182,29 @@ async def _process_tile(
     # already trimmed the data to the ROI boundary.
     mask_geom = tile.geom if tile.tile_class == "partial" else None
 
+    index_names = [e.output_band or e.name for e in cfg.dataset.indices]
+    if cfg.output.structure.separate_indices and index_names:
+        index_set = set(index_names)
+        main_bands = [b for b in ordered_bands if b not in index_set]
+        main_idx = [ordered_bands.index(b) for b in main_bands]
+        main_array = array[main_idx]
+        write_main_bands = main_bands
+        index_slices: list[tuple[str, Any]] = [
+            (name, array[ordered_bands.index(name) : ordered_bands.index(name) + 1])
+            for name in index_names
+        ]
+    else:
+        main_array = array
+        write_main_bands = ordered_bands
+        index_slices = []
+
     written = await scheduler.run_blocking(
         write_tile,
-        array,
+        main_array,
         output_path=out_path,
         transform=transform,
         crs=f"EPSG:{epsg}",
-        band_names=ordered_bands,
+        band_names=write_main_bands,
         dtype=cfg.output.dtype,
         nodata=cfg.output.nodata,
         compression=cfg.output.compression,
@@ -196,6 +212,24 @@ async def _process_tile(
         mask_geom=mask_geom,
         overlap_px=cfg.tiling.overlap_px,
     )
+
+    for idx_name, idx_array in index_slices:
+        idx_dir = out_dir / f"_{idx_name}"
+        idx_dir.mkdir(parents=True, exist_ok=True)
+        await scheduler.run_blocking(
+            write_tile,
+            idx_array,
+            output_path=idx_dir / f"{fname}.tif",
+            transform=transform,
+            crs=f"EPSG:{epsg}",
+            band_names=[idx_name],
+            dtype=cfg.output.dtype,
+            nodata=cfg.output.nodata,
+            compression=cfg.output.compression,
+            fmt=cfg.output.format,
+            mask_geom=mask_geom,
+            overlap_px=cfg.tiling.overlap_px,
+        )
 
     write_stac_sidecar(
         tile_id=tile_unit,
@@ -205,7 +239,7 @@ async def _process_tile(
         end=datetime.combine(window.end, datetime.min.time()),
         platform=cfg.dataset.name,
         gsd=resolution_m,
-        bands=ordered_bands,
+        bands=write_main_bands,
         extra={
             "tile_class": tile.tile_class,
             "coverage": tile.coverage,
@@ -466,7 +500,10 @@ def _finalize_outputs(
 
     project = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True).transform
     geom_4326 = shp_transform(project, roi_geom)
-    bands = list(cfg.dataset.bands.select or []) + [i.output_band or i.name for i in cfg.dataset.indices]
+    index_names = [i.output_band or i.name for i in cfg.dataset.indices]
+    main_bands = list(cfg.dataset.bands.select or [])
+    if not cfg.output.structure.separate_indices:
+        main_bands = main_bands + index_names
 
     final_dir = output_root / cfg.dataset.name
     for w in windows:
@@ -482,19 +519,46 @@ def _finalize_outputs(
             nodata=cfg.output.nodata,
             clip_geom=roi_geom,
         )
-        if merged is None:
-            continue
-        write_stac_sidecar(
-            tile_id=f"{cfg.job_name}_{w.label}",
-            output_tif=merged,
-            geometry=geom_4326,
-            start=datetime.combine(w.start, datetime.min.time()),
-            end=datetime.combine(w.end, datetime.min.time()),
-            platform=cfg.dataset.name,
-            gsd=dataset_spec.native_res,
-            bands=bands,
-            extra={"window_type": cfg.composite.window.type},
-        )
+        if merged is not None:
+            write_stac_sidecar(
+                tile_id=f"{cfg.job_name}_{w.label}",
+                output_tif=merged,
+                geometry=geom_4326,
+                start=datetime.combine(w.start, datetime.min.time()),
+                end=datetime.combine(w.end, datetime.min.time()),
+                platform=cfg.dataset.name,
+                gsd=dataset_spec.native_res,
+                bands=main_bands,
+                extra={"window_type": cfg.composite.window.type},
+            )
+
+        if cfg.output.structure.separate_indices:
+            for idx_name in index_names:
+                idx_tile_dir = tile_dir / f"_{idx_name}"
+                if not idx_tile_dir.exists():
+                    continue
+                idx_final = final_dir / f"{cfg.job_name}_{w.label}_{idx_name}.tif"
+                merged_idx = _merge_window(
+                    idx_tile_dir,
+                    idx_final,
+                    compression=cfg.output.compression,
+                    fmt=cfg.output.format,
+                    nodata=cfg.output.nodata,
+                    clip_geom=roi_geom,
+                )
+                if merged_idx is None:
+                    continue
+                write_stac_sidecar(
+                    tile_id=f"{cfg.job_name}_{w.label}_{idx_name}",
+                    output_tif=merged_idx,
+                    geometry=geom_4326,
+                    start=datetime.combine(w.start, datetime.min.time()),
+                    end=datetime.combine(w.end, datetime.min.time()),
+                    platform=cfg.dataset.name,
+                    gsd=dataset_spec.native_res,
+                    bands=[idx_name],
+                    extra={"window_type": cfg.composite.window.type, "derived": True},
+                )
 
     shutil.rmtree(output_root / ".tmp", ignore_errors=True)
 

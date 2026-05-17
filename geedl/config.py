@@ -102,7 +102,7 @@ class OutputStructureConfig(_Frozen):
     timeseries_mode: bool = False
     band_interleave: Literal["BIP", "BIL", "BSQ"] = "BIP"
     filename_template: str = "tile_{tile_id}_{window_label}"
-    separate_indices: bool = False
+    separate_indices: bool = True
 
 
 class OutputConfig(_Frozen):

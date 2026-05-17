@@ -94,10 +94,21 @@ def apply_bands_and_indices(
         scale = dataset_spec.scale_factor
     offset = dataset_cfg.bands.offset or dataset_spec.offset
 
-    if scale is not None and scale != 1.0:
-        img = img.multiply(scale)
-    if offset:
-        img = img.add(offset)
+    # Scale/offset apply only to bands flagged scaled=true in the registry.
+    # Classification/QA bands (SCL, QA_PIXEL) must keep their integer codes.
+    scaled = [b for b in selected if dataset_spec.bands[b].scaled]
+    unscaled = [b for b in selected if not dataset_spec.bands[b].scaled]
+    needs_scale = scaled and ((scale is not None and scale != 1.0) or offset)
+    if needs_scale:
+        scaled_img = img.select(scaled)
+        if scale is not None and scale != 1.0:
+            scaled_img = scaled_img.multiply(scale)
+        if offset:
+            scaled_img = scaled_img.add(offset)
+        if unscaled:
+            img = scaled_img.addBands(img.select(unscaled)).select(selected)
+        else:
+            img = scaled_img.select(selected)
 
     index_names = [e.name for e in dataset_cfg.indices]
     if index_names:
