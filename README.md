@@ -38,7 +38,9 @@ fails. **geedl skips all of that.**
 - **Direct download from Earth Engine** via `ee.data.computePixels()` — no GCS, no Drive.
 - **Shapefile ROI support** — auto-projects to UTM, simplifies for upload, tiles intelligently.
 - **Smart tiling** — classifies tiles as `inside`, `partial`, or `outside`; skips empty space; orders by **Hilbert curve** for cache-warm EE requests.
-- **Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes.
+- **Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes. Scene mode suggests nearest available dates when the requested day has no imagery.
+- **Per-window tile merging** — tiles stream to a temp staging dir, then merge into one COG per ROI/window before the job finalises.
+- **Live progress bars** — overall + per-window tqdm bars track every tile through download, validation, and write.
 - **Spectral indices** — built-in NDVI, EVI, NDWI, NDMI, NBR, NDSI, SAVI, BSI, RVI, VV/VH ratio. Add your own with one decorated function.
 - **Crash-safe & resumable** — every tile is checkpointed; atomic writes (`.tmp` → `os.rename`) guarantee no corrupt files on disk.
 - **Cloud masking** built in — Sentinel-2 SCL, Landsat C2 `QA_PIXEL`. Cloud + shadow + snow toggles per job.
@@ -202,6 +204,20 @@ composite:
   window: {type: fixed_days, size: 90, step: 90, anchor: center}
 ```
 
+**Single-date scene mode — grab the nearest available Sentinel-1 acquisition**
+
+```yaml
+dataset:
+  name: sentinel-1
+  bands: {select: [VV, VH]}
+date:
+  start: "2024-06-15"
+  end:   "2024-06-15"
+composite:
+  strategy: none
+  window: {type: scene}   # one output per intersecting scene; suggests nearby dates if empty
+```
+
 **Landsat 7 — SLC-off recovery via long compositing window**
 
 ```yaml
@@ -331,6 +347,7 @@ gdf[gdf.datetime.str.startswith("2023-01")].plot()
 5. **Validation** — each array is checked for shape, all-nodata, and plausible value range before being written.
 6. **Atomic write** — data is written to `{path}.tmp.tif`, internally tiled at 256×256, overviews are built, then `os.rename()` swaps it into place.
 7. **Checkpoint** — only after the rename succeeds is the tile marked `done` in the SQLite checkpoint. Crash recovery resets `in_flight` tiles to `pending` and deletes any stragglers on the next launch.
+8. **Merge & catalog** — once every tile in a window is `done`, partial tiles are merged into one COG per ROI/window. The STAC sidecars and `catalog.parquet` are written from the merged outputs at the end of the job.
 
 See [`ARCH.md`](ARCH.md) for the full design rationale and decision log.
 
@@ -353,9 +370,9 @@ geedl cleanup    -c job.yaml                             # delete EE asset
 ## Project status
 
 `geedl` v0.1 is **pre-1.0 software**. Core pipeline works end-to-end on the
-listed datasets. Known gaps: single-process only, scene-mode (no compositing)
-not yet wired in the runner, no GUI. See [`ARCH.md`](ARCH.md) §17 for the
-full caveat list.
+listed datasets, including scene-mode for single-date jobs with nearest-date
+fallback suggestions. Known gaps: single-process only, no GUI.
+See [`ARCH.md`](ARCH.md) §17 for the full caveat list.
 
 ---
 

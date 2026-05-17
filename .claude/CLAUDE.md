@@ -112,19 +112,22 @@ geedl/
       tiler.py          # grid generation + tile classification
       asset_manager.py  # EE asset upload, reuse, cleanup
     pipeline/
+      runner.py         # job orchestration: tiles × windows → merge → catalog
       scheduler.py      # asyncio task runner + semaphore
       downloader.py     # ee.data.computePixels wrapper
       compositor.py     # window generation + image compositing
+      scenes.py         # scene-mode helpers (EE-aware, not pure)
       validator.py      # per-tile array integrity checks
     io/
       writer.py         # atomic COG/GeoTIFF write
       catalog.py        # STAC sidecar + GeoParquet index
       checkpoint.py     # SQLite state machine
     utils/
+      auth.py           # initialize_ee() — single place ee.Initialize is called
       crs.py            # auto-UTM from centroid
       retry.py          # exponential backoff with full jitter
       budget.py         # pixel budget calculator
-      windows.py        # time window generator
+      windows.py        # time window generator (pure)
   tests/
     fixtures/           # small shapefiles + VCR cassettes
   GEEDL_DESIGN.md       # full design doc — read before touching architecture
@@ -143,7 +146,7 @@ Each module owns exactly one concern. Do not let concerns bleed across boundarie
 - Does not: validate EE-specific constraints (that's `validator.py`) or compute
   derived values (that's each module's responsibility on first use).
 - Key types to keep stable: `BandsConfig`, `WindowConfig`, `OutputStructureConfig`,
-  `SlcOffConfig`, `HooksConfig`.
+  `SlcOffConfig`, `HooksConfig`, `AuthConfig`.
 
 ### `datasets/registry.py`
 - Owns: loading `registry.yaml` into typed dataclasses. Providing `get(slug)`.
@@ -180,6 +183,28 @@ Each module owns exactly one concern. Do not let concerns bleed across boundarie
 - Block until the upload task reaches `COMPLETED` or raises on `FAILED`.
 - Store `asset_id` in the checkpoint DB immediately after upload succeeds.
 - On resume: read `asset_id` from DB, skip upload entirely.
+
+### `pipeline/runner.py`
+- Owns: end-to-end job orchestration. Loads ROI, uploads/reuses the EE asset,
+  generates tiles + windows, drives the scheduler, then merges partial tile
+  outputs into final per-window mosaics and writes the catalog.
+- Two-stage output: tiles are written to a temp staging dir during download,
+  then merged (`rasterio.merge`) into the final files per ROI/window before
+  the job completes. Catalog and STAC sidecars are written from the merged
+  outputs only.
+- Owns progress reporting: one overall `tqdm` bar plus one per-window bar,
+  updated through the `_bump_progress` helper at every tile completion path
+  (success, validation fail, retry exhaustion, shape mismatch).
+- Calls `utils/auth.initialize_ee(cfg)` exactly once at job start.
+
+### `pipeline/scenes.py`
+- Owns: scene-mode helpers — enumerate EE scenes intersecting the ROI,
+  filter by coverage, convert scene dates into per-scene "windows", and
+  suggest nearest available dates when the requested range is empty.
+- EE-aware; not pure. Kept separate from `compositor.py` so `windows.py`
+  stays pure and credential-free.
+- `NoScenesAvailableError` carries up to N nearest-date suggestions for the
+  CLI to surface to the user.
 
 ### `pipeline/compositor.py`
 - Owns: `generate_windows()` and `composite()`.
@@ -353,8 +378,9 @@ All retryable errors go through `utils/retry.py`. Never write `time.sleep` or
 - Do not write `catalog.parquet` incrementally. Write it once at job completion.
 - Do not store the raw shapefile bytes in the checkpoint DB. Store only the
   asset ID and config hash.
-- Do not call `ee.Initialize()` anywhere except `cli.py`. Modules receive EE
-  objects as arguments — they do not initialize EE themselves.
+- Do not call `ee.Initialize()` anywhere except `utils/auth.py:initialize_ee`.
+  The CLI and runner call that helper; other modules receive EE objects as
+  arguments and do not initialize EE themselves.
 
 ---
 
@@ -365,7 +391,10 @@ The dependency graph is strictly layered. Lower layers must not import from uppe
 ```
 cli.py
   └── config.py
-  └── pipeline/scheduler.py
+  └── utils/auth.py
+  └── pipeline/runner.py
+        └── pipeline/scenes.py
+        └── pipeline/scheduler.py
         └── pipeline/downloader.py
               └── datasets/registry.py
               └── indices/__init__.py
@@ -446,6 +475,9 @@ pipeline.timeout_per_tile         int
 asset.project                     str
 asset.base_path                   str
 asset.auto_cleanup                bool
+auth.method                       "browser" | "service_account"
+auth.service_account_email        str | null  (required if service_account)
+auth.key_file                     str | null  (required if service_account)
 hooks.pre_download                str | null  ("module:fn")
 hooks.post_tile                   str | null
 hooks.post_job                    str | null
