@@ -35,16 +35,16 @@ fails. **geedl skips all of that.**
 
 ## Features
 
-- 🛰️ **Direct download from Earth Engine** via `ee.data.computePixels()` — no GCS, no Drive.
-- 🌍 **Shapefile ROI support** — auto-projects to UTM, simplifies for upload, tiles intelligently.
-- 🧩 **Smart tiling** — classifies tiles as `inside`, `partial`, or `outside`; skips empty space; orders by **Hilbert curve** for cache-warm EE requests.
-- ⏱️ **Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes.
-- 📐 **Spectral indices** — built-in NDVI, EVI, NDWI, NDMI, NBR, NDSI, SAVI, BSI, RVI, VV/VH ratio. Add your own with one decorated function.
-- 🔁 **Crash-safe & resumable** — every tile is checkpointed; atomic writes (`.tmp` → `os.rename`) guarantee no corrupt files on disk.
-- ☁️ **Cloud masking** built in — Sentinel-2 SCL, Landsat C2 `QA_PIXEL`. Cloud + shadow + snow toggles per job.
-- 🛰️ **Landsat 7 SLC-off** handled by multi-temporal compositing — no focal blur, no broken indices.
-- 📦 **COG output** — natively readable by QGIS, GDAL, stackstac, and STAC browsers.
-- 🤖 **AI-agent friendly** — the YAML config is the single source of truth. Swap datasets, indices, output shapes, or pipeline behavior without touching Python.
+- **Direct download from Earth Engine** via `ee.data.computePixels()` — no GCS, no Drive.
+- **Shapefile ROI support** — auto-projects to UTM, simplifies for upload, tiles intelligently.
+- **Smart tiling** — classifies tiles as `inside`, `partial`, or `outside`; skips empty space; orders by **Hilbert curve** for cache-warm EE requests.
+- ⏱**Time-windowed compositing** — fixed-day, calendar-month, calendar-year, full-range, or single-scene modes.
+- **Spectral indices** — built-in NDVI, EVI, NDWI, NDMI, NBR, NDSI, SAVI, BSI, RVI, VV/VH ratio. Add your own with one decorated function.
+- **Crash-safe & resumable** — every tile is checkpointed; atomic writes (`.tmp` → `os.rename`) guarantee no corrupt files on disk.
+- **Cloud masking** built in — Sentinel-2 SCL, Landsat C2 `QA_PIXEL`. Cloud + shadow + snow toggles per job.
+- **Landsat 7 SLC-off** handled by multi-temporal compositing — no focal blur, no broken indices.
+- **COG output** — natively readable by QGIS, GDAL, stackstac, and STAC browsers.
+- **AI-agent friendly** — the YAML config is the single source of truth. Swap datasets, indices, output shapes, or pipeline behavior without touching Python.
 
 ---
 
