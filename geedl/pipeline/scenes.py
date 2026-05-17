@@ -124,7 +124,7 @@ def scenes_to_windows(scenes: list[Scene], label_format: str):
         if s.date not in by_date or s.time_start_ms < by_date[s.date].time_start_ms:
             by_date[s.date] = s
     return [
-        Window(d, d, d.strftime(label_format))
+        Window(d, d + timedelta(days=1), d.strftime(label_format))
         for d in sorted(by_date)
     ]
 
