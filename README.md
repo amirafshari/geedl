@@ -145,6 +145,112 @@ geedl status -c job.yaml               # check progress
 
 ---
 
+## Usage
+
+### Authentication
+
+Two methods, selected in YAML:
+
+```yaml
+# Browser flow (default) — uses your `earthengine authenticate` credentials.
+auth:
+  method: browser
+
+# Service account — for headless / CI use.
+auth:
+  method: service_account
+  service_account_email: bot@my-proj.iam.gserviceaccount.com
+  key_file: /etc/secrets/ee-key.json
+```
+
+### Per-sensor configs
+
+**Sentinel-2 — monthly NDVI/EVI composites**
+
+```yaml
+dataset:
+  name: sentinel-2
+  bands: {select: [B2, B3, B4, B8, B11]}
+  indices: [{name: NDVI}, {name: EVI}, {name: NDMI}]
+  cloud_mask: {enabled: true, mask_shadow: true, mask_snow: false}
+composite:
+  strategy: median
+  window: {type: calendar_month}
+```
+
+**Sentinel-1 — VV/VH backscatter mosaics**
+
+```yaml
+dataset:
+  name: sentinel-1
+  bands: {select: [VV, VH]}
+  indices: [{name: RVI}]
+composite:
+  strategy: median   # ignored — S1 always forces mosaic (see CLAUDE.md §7)
+  window: {type: fixed_days, size: 12, step: 12}
+```
+
+**Landsat 8/9 — quarterly composites**
+
+```yaml
+dataset:
+  name: landsat-8
+  bands: {select: [SR_B2, SR_B3, SR_B4, SR_B5, SR_B6, SR_B7]}
+  indices: [{name: NDVI}, {name: NBR}, {name: SAVI}]
+composite:
+  strategy: median
+  window: {type: fixed_days, size: 90, step: 90, anchor: center}
+```
+
+**Landsat 7 — SLC-off recovery via long compositing window**
+
+```yaml
+dataset:
+  name: landsat-7
+  bands: {select: [SR_B3, SR_B4, SR_B5]}
+  indices: [{name: NDVI}]
+  slc_off: {strategy: multi_temporal, min_scenes_warning: 5}
+composite:
+  strategy: median
+  window: {type: calendar_year}   # wide enough to fill SLC gaps
+```
+
+### Tuning concurrency and tile size
+
+```yaml
+pipeline:
+  concurrency: 16          # parallel async tiles
+  max_retries: 6
+  retry_base_delay: 1.0
+  timeout_per_tile: 120
+tiling:
+  max_tile_bytes: null     # null = auto, derived from EE's 50 MB request budget
+  overlap_px: 2            # request buffer to avoid seam artifacts
+  skip_coverage_threshold: 0.05  # tiles <5% inside ROI are skipped
+```
+
+### Hooks
+
+Run user code at three lifecycle points (format: `module.path:function_name`):
+
+```yaml
+hooks:
+  pre_download: my_pkg.hooks:before_tile
+  post_tile:    my_pkg.hooks:after_tile
+  post_job:     my_pkg.hooks:on_finish
+```
+
+### Running tests
+
+```bash
+pytest                       # full unit + integration suite (~2s, no EE calls)
+pytest --live                # also runs the opt-in EE smoke tests
+                             #   requires: export GEEDL_TEST_EE_PROJECT=<your-proj>
+pytest tests/test_indices_matrix.py -v   # one module
+```
+
+---
+
 ## Supported datasets
 
 | Slug | Collection | Native resolution |
