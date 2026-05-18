@@ -218,6 +218,27 @@ composite:
   window: {type: scene}   # one output per intersecting scene; suggests nearby dates if empty
 ```
 
+**Indices-only output — drop the source bands, keep only the computed index**
+
+```yaml
+dataset:
+  name: sentinel-2
+  bands:
+    select: []                # [] = no source bands; null = all registry bands; list = those bands
+  indices:
+    - {name: NDVI}
+output:
+  structure:
+    separate_indices: true    # each index gets its own GeoTIFF
+```
+
+`bands.select` is a tri-state:
+- `null` (omitted) — keep all bands defined in `registry.yaml` for the dataset.
+- `[]` — keep no source bands. The job is rejected at validation time unless at least one index is requested.
+- `[B4, B8, ...]` — keep exactly those bands.
+
+In all three cases, indices are computed from the native source bands regardless of `select` (the expressions reference NIR/RED/etc. directly), so `select: []` still produces valid NDVI/EVI/etc. output.
+
 **Landsat 7 — SLC-off recovery via long compositing window**
 
 ```yaml

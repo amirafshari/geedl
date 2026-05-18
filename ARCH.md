@@ -116,7 +116,7 @@ roi:
 dataset:
   name: sentinel-2
   bands:
-    select: [B4, B3, B2, B8]    # null = all non-internal bands in registry
+    select: [B4, B3, B2, B8]    # null = all registry bands; [] = indices only; list = those bands
     order: null
     rename: null
     scale_factor: null          # null = registry default

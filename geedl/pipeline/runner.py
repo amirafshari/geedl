@@ -234,7 +234,7 @@ async def _process_tile(
         index_set = set(index_names)
         main_bands = [b for b in ordered_bands if b not in index_set]
         main_idx = [ordered_bands.index(b) for b in main_bands]
-        main_array = array[main_idx]
+        main_array = array[main_idx] if main_bands else None
         write_main_bands = main_bands
         index_slices: list[tuple[str, Any]] = [
             (name, array[ordered_bands.index(name) : ordered_bands.index(name) + 1])
@@ -245,25 +245,27 @@ async def _process_tile(
         write_main_bands = ordered_bands
         index_slices = []
 
-    written = await scheduler.run_blocking(
-        write_tile,
-        main_array,
-        output_path=out_path,
-        transform=transform,
-        crs=f"EPSG:{epsg}",
-        band_names=write_main_bands,
-        dtype=cfg.output.dtype,
-        nodata=cfg.output.nodata,
-        compression=cfg.output.compression,
-        fmt=cfg.output.format,
-        mask_geom=mask_geom,
-        overlap_px=cfg.tiling.overlap_px,
-    )
+    written: Path | None = None
+    if main_array is not None:
+        written = await scheduler.run_blocking(
+            write_tile,
+            main_array,
+            output_path=out_path,
+            transform=transform,
+            crs=f"EPSG:{epsg}",
+            band_names=write_main_bands,
+            dtype=cfg.output.dtype,
+            nodata=cfg.output.nodata,
+            compression=cfg.output.compression,
+            fmt=cfg.output.format,
+            mask_geom=mask_geom,
+            overlap_px=cfg.tiling.overlap_px,
+        )
 
     for idx_name, idx_array in index_slices:
         idx_dir = out_dir / f"_{idx_name}"
         idx_dir.mkdir(parents=True, exist_ok=True)
-        await scheduler.run_blocking(
+        idx_written = await scheduler.run_blocking(
             write_tile,
             idx_array,
             output_path=idx_dir / f"{fname}.tif",
@@ -277,22 +279,25 @@ async def _process_tile(
             mask_geom=mask_geom,
             overlap_px=cfg.tiling.overlap_px,
         )
+        if written is None:
+            written = idx_written
 
-    write_stac_sidecar(
-        tile_id=tile_unit,
-        output_tif=written,
-        geometry=tile.geom,
-        start=datetime.combine(window.start, datetime.min.time()),
-        end=datetime.combine(window.end, datetime.min.time()),
-        platform=cfg.dataset.name,
-        gsd=resolution_m,
-        bands=write_main_bands,
-        extra={
-            "tile_class": tile.tile_class,
-            "coverage": tile.coverage,
-            "window_type": cfg.composite.window.type,
-        },
-    )
+    if write_main_bands:
+        write_stac_sidecar(
+            tile_id=tile_unit,
+            output_tif=written,
+            geometry=tile.geom,
+            start=datetime.combine(window.start, datetime.min.time()),
+            end=datetime.combine(window.end, datetime.min.time()),
+            platform=cfg.dataset.name,
+            gsd=resolution_m,
+            bands=write_main_bands,
+            extra={
+                "tile_class": tile.tile_class,
+                "coverage": tile.coverage,
+                "window_type": cfg.composite.window.type,
+            },
+        )
 
     checkpoint.mark_done(tile_unit, str(written))
     _bump_progress(progress, window.label, failed=False)

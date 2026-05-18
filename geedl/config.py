@@ -38,7 +38,10 @@ class IndexEntry(_Frozen):
 
 
 class BandsConfig(_Frozen):
-    select: list[str] | None = Field(None, description="Bands to keep (null = all in registry).")
+    select: list[str] | None = Field(
+        None,
+        description="Bands to keep. null = all bands from registry; [] = no source bands (indices only); list = those bands.",
+    )
     order: list[str] | None = Field(None, description="Explicit output band order.")
     rename: dict[str, str] | None = Field(None, description="Rename map applied after download.")
     scale_factor: float | None = Field(None, description="Scale factor (null = registry default).")
@@ -63,6 +66,15 @@ class DatasetConfig(_Frozen):
     indices: list[IndexEntry] = Field(default_factory=list)
     cloud_mask: CloudMaskConfig = Field(default_factory=CloudMaskConfig)
     slc_off: SlcOffConfig = Field(default_factory=SlcOffConfig)
+
+    @model_validator(mode="after")
+    def _check_output_not_empty(self) -> "DatasetConfig":
+        if self.bands.select == [] and not self.indices:
+            raise ValueError(
+                "dataset.bands.select=[] with no indices would produce an empty image; "
+                "set bands.select to null (all registry bands) or add at least one index."
+            )
+        return self
 
 
 class DateConfig(_Frozen):

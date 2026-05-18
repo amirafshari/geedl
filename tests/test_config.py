@@ -63,6 +63,25 @@ def test_config_hash_is_stable():
     assert cfg2.config_hash() != h1
 
 
+def test_empty_bands_with_indices_validates():
+    raw = _minimal()
+    raw["dataset"] = {
+        "name": "sentinel-2",
+        "bands": {"select": []},
+        "indices": [{"name": "NDVI"}],
+    }
+    cfg = JobConfig.model_validate(raw)
+    assert cfg.dataset.bands.select == []
+    assert [e.name for e in cfg.dataset.indices] == ["NDVI"]
+
+
+def test_empty_bands_without_indices_rejected():
+    raw = _minimal()
+    raw["dataset"] = {"name": "sentinel-2", "bands": {"select": []}}
+    with pytest.raises(Exception, match="empty image"):
+        JobConfig.model_validate(raw)
+
+
 def test_load_config_from_yaml(tmp_path):
     import yaml
     p = tmp_path / "job.yaml"

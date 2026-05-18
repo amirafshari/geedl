@@ -13,7 +13,7 @@ dataset:
   # Dataset slug from registry.yaml.
   name: sentinel-1
   bands:
-    # Bands to keep (null = all in registry).
+    # Bands to keep. null = all registry bands; [] = indices only; list = those bands.
     select: [VV, VH]
     # order: null                     # Explicit output band order.
     # rename: null                    # Rename map applied after download.

@@ -9,8 +9,9 @@ dataset:
   # Dataset slug from registry.yaml.
   name: sentinel-2
   bands:
-    # Select only the bands required to compute NDVI (Red + NIR).
-    select: [B4, B8]
+    # null = all registry bands; [] = no source bands (indices only); list = those bands.
+    # Drop source bands entirely and keep only the NDVI output.
+    select: []
   indices:
     - name: NDVI
   cloud_mask:

@@ -67,7 +67,12 @@ def composite(
 
 
 def _resolve_band_order(dataset_cfg: DatasetConfig, default_bands: list[str]) -> list[str]:
-    base = list(dataset_cfg.bands.order or dataset_cfg.bands.select or default_bands)
+    if dataset_cfg.bands.order is not None:
+        base = list(dataset_cfg.bands.order)
+    elif dataset_cfg.bands.select is not None:
+        base = list(dataset_cfg.bands.select)
+    else:
+        base = list(default_bands)
     result = base[:]
     int_offset = 0
     for entry in dataset_cfg.indices:
@@ -93,8 +98,14 @@ def apply_bands_and_indices(
 
     Returns the final image and the ordered band list (post-rename).
     """
-    selected = list(dataset_cfg.bands.select or dataset_spec.band_names())
-    img = image.select(selected)
+    # bands.select: None → all registry bands; [] → no source bands (indices only); list → as given.
+    if dataset_cfg.bands.select is None:
+        selected = list(dataset_spec.band_names())
+    else:
+        selected = list(dataset_cfg.bands.select)
+    # When selected is empty we keep the full source image so index expressions
+    # can still reference native bands; the final select(ordered) drops them.
+    img = image.select(selected) if selected else image
 
     scale = dataset_cfg.bands.scale_factor
     if scale is None:

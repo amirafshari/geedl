@@ -10,8 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from geedl.config import BandsConfig, DatasetConfig, IndexEntry
 from geedl.datasets.registry import DatasetSpec, get
-from geedl.pipeline.compositor import composite
+from geedl.pipeline.compositor import _resolve_band_order, composite
 
 
 def _mock_col() -> MagicMock:
@@ -49,6 +50,29 @@ def test_unknown_strategy_raises() -> None:
     spec = get("sentinel-2")
     with pytest.raises(ValueError, match="Unknown composite strategy"):
         composite(col, "not_a_strategy", spec)
+
+
+def test_resolve_band_order_select_none_uses_defaults() -> None:
+    cfg = DatasetConfig(name="sentinel-2", indices=[IndexEntry(name="NDVI")])
+    assert _resolve_band_order(cfg, ["B4", "B8"]) == ["B4", "B8", "NDVI"]
+
+
+def test_resolve_band_order_select_empty_yields_indices_only() -> None:
+    cfg = DatasetConfig(
+        name="sentinel-2",
+        bands=BandsConfig(select=[]),
+        indices=[IndexEntry(name="NDVI")],
+    )
+    assert _resolve_band_order(cfg, []) == ["NDVI"]
+
+
+def test_resolve_band_order_explicit_select_keeps_listed_bands() -> None:
+    cfg = DatasetConfig(
+        name="sentinel-2",
+        bands=BandsConfig(select=["B4", "B8"]),
+        indices=[IndexEntry(name="NDVI")],
+    )
+    assert _resolve_band_order(cfg, ["B4", "B8"]) == ["B4", "B8", "NDVI"]
 
 
 def test_override_wins_for_every_strategy() -> None:

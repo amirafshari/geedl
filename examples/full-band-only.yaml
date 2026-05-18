@@ -7,7 +7,7 @@ roi:
 dataset:
   name: sentinel-2
   bands:
-    # null = all bands from registry (B1, B2, B3, B4, B5, B6, B7, B8, B8A, B9, B11, B12).
+    # null = all registry bands; [] = no source bands (indices only); list = those bands.
     select: null
   indices: []
   cloud_mask:
