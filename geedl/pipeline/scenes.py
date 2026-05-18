@@ -5,6 +5,7 @@ EE-aware; not pure. Lives alongside compositor.py — windows.py stays pure.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -152,17 +153,33 @@ def filter_scenes_by_coverage(
     roi_fc: ee.FeatureCollection,
     cloud_mask_fn,
     min_coverage: float,
+    *,
+    concurrency: int = 1,
 ) -> tuple[list[Scene], dict[str, float]]:
     """Drop scenes whose ROI cloud-free coverage is below `min_coverage`.
 
     Returns (kept, coverage_map) — coverage_map keyed by scene_id so the caller
-    can log/explain why a date was rejected.
+    can log/explain why a date was rejected. Coverage probes are blocking EE
+    round-trips; with `concurrency > 1` they run in parallel via a thread pool.
     """
+    if concurrency > 1 and len(scenes) > 1:
+        coverage: dict[str, float] = {}
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(scenes))) as pool:
+            futs = {
+                pool.submit(scene_roi_coverage, dataset_spec, s, roi_fc, cloud_mask_fn): s
+                for s in scenes
+            }
+            for fut in as_completed(futs):
+                coverage[futs[fut].scene_id] = fut.result()
+    else:
+        coverage = {
+            s.scene_id: scene_roi_coverage(dataset_spec, s, roi_fc, cloud_mask_fn)
+            for s in scenes
+        }
+
     kept: list[Scene] = []
-    coverage: dict[str, float] = {}
     for s in scenes:
-        c = scene_roi_coverage(dataset_spec, s, roi_fc, cloud_mask_fn)
-        coverage[s.scene_id] = c
+        c = coverage[s.scene_id]
         if c >= min_coverage:
             kept.append(s)
             log.info("scene %s (%s) coverage=%.1f%% — kept", s.scene_id, s.date, c * 100)

@@ -7,6 +7,7 @@ import importlib
 import logging
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -84,27 +85,38 @@ def _suggest_cleaner_dates(
     *,
     n: int = 5,
     candidates: int = 12,
+    concurrency: int = 1,
 ) -> list:
     """Find up to `n` nearby dates whose ROI coverage clears `min_coverage`.
 
     `suggest_nearest_dates` returns dates that have *any* scene; we further
     filter by per-scene coverage so the suggestions are actually useful. Caps
-    the number of EE coverage calls at `candidates` to control cost.
+    the number of EE coverage calls at `candidates` to control cost. Probes
+    run in parallel when `concurrency > 1`.
     """
     nearby = suggest_nearest_dates(dataset_spec, roi_fc, target, n=candidates)
     if not nearby:
         return []
-    scored: list[tuple[float, "date"]] = []
-    from datetime import timedelta as _td
-    for d in nearby:
+
+    def _best_coverage(d):
         scenes = enumerate_scenes(dataset_spec, roi_fc, d, d)
         if not scenes:
-            continue
-        best = max(
+            return None
+        return max(
             scene_roi_coverage(dataset_spec, s, roi_fc, mask_fn) for s in scenes
         )
-        if best >= min_coverage:
-            scored.append((abs((d - target).days), d))
+
+    if concurrency > 1 and len(nearby) > 1:
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(nearby))) as pool:
+            probed = list(pool.map(_best_coverage, nearby))
+    else:
+        probed = [_best_coverage(d) for d in nearby]
+
+    scored: list[tuple[int, "date"]] = []
+    for d, best in zip(nearby, probed):
+        if best is None or best < min_coverage:
+            continue
+        scored.append((abs((d - target).days), d))
     scored.sort()
     return [d for _, d in scored[:n]]
 
@@ -359,11 +371,13 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
                 },
             )
             kept, _ = filter_scenes_by_coverage(
-                dataset_spec, scenes, roi_fc, mask_fn, min_cov
+                dataset_spec, scenes, roi_fc, mask_fn, min_cov,
+                concurrency=cfg.pipeline.concurrency,
             )
             if not kept:
                 cleaner = _suggest_cleaner_dates(
-                    dataset_spec, roi_fc, cfg.date.start, mask_fn, min_cov
+                    dataset_spec, roi_fc, cfg.date.start, mask_fn, min_cov,
+                    concurrency=cfg.pipeline.concurrency,
                 )
                 raise NoScenesAvailableError(
                     cfg.dataset.name, (cfg.date.start, cfg.date.end), cleaner
