@@ -130,6 +130,7 @@ async def _process_tile(
     checkpoint: Checkpoint,
     scheduler: Scheduler,
     hooks: dict[str, Callable[..., Any] | None],
+    window_images: dict[str, tuple[ee.Image, ee.Image, list[str]]],
     progress: dict[str, Any] | None = None,
 ) -> None:
     tile_unit = f"{tile.grid_label}_{window.label}"
@@ -153,15 +154,8 @@ async def _process_tile(
     )
     out_path = out_dir / f"{fname}.tif"
 
-    image, ordered_bands = compositor.build_window_image(
-        cfg.dataset, dataset_spec, cfg.composite.strategy, window, roi_fc,
-    )
-    if tile.tile_class == "partial":
-        image = image.clip(roi_fc)
-    # Materialise masked pixels (clouds, out-of-ROI, native gaps) as the
-    # configured nodata value. Without this, ee.data.computePixels would
-    # return 0 for masked pixels regardless of the GeoTIFF nodata tag.
-    image = image.unmask(cfg.output.nodata)
+    inside_img, partial_img, ordered_bands = window_images[window.label]
+    image = partial_img if tile.tile_class == "partial" else inside_img
 
     affine = (resolution_m, 0.0, minx, 0.0, -resolution_m, maxy)
 
@@ -387,6 +381,19 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
     else:
         log.info("generated %d windows", len(windows))
 
+    # Build each window's ee.Image once and reuse for every tile. The image
+    # depends only on the window, not on the tile bbox — rebuilding it inside
+    # _process_tile would re-walk the cloud-mask/composite/index graph for
+    # every (tile × window) pair on the asyncio event loop.
+    window_images: dict[str, tuple[ee.Image, ee.Image, list[str]]] = {}
+    for w in windows:
+        base, ordered = compositor.build_window_image(
+            cfg.dataset, dataset_spec, cfg.composite.strategy, w, roi_fc,
+        )
+        inside_img = base.unmask(cfg.output.nodata)
+        partial_img = base.clip(roi_fc).unmask(cfg.output.nodata)
+        window_images[w.label] = (inside_img, partial_img, ordered)
+
     output_root = Path(cfg.output.dir)
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "job.yaml").write_text(yaml.safe_dump(cfg.model_dump(mode="json")))
@@ -458,6 +465,7 @@ async def _run(cfg: JobConfig, *, fresh: bool, retry_failed: bool) -> None:
                 checkpoint=ckpt,
                 scheduler=scheduler,
                 hooks=hooks,
+                window_images=window_images,
                 progress=progress,
             )
 
