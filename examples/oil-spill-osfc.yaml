@@ -1,0 +1,44 @@
+# Oil spill false-color composite: SWIR2 (B12) -> R, NIR (B8) -> G, Red (B4) -> B.
+job_name: sentinel2_oil_spill_osfc
+
+roi:
+  path: assets/lavan-test.shp
+
+dataset:
+  name: sentinel-2
+  bands:
+    select: [B12, B8, B4]
+    order: [B12, B8, B4]
+  indices: []
+  cloud_mask:
+    enabled: false
+    profile: auto
+    mask_shadow: false
+    mask_snow: false
+
+date:
+  start: "2026-04-10"
+  end: "2026-04-10"
+
+composite:
+  strategy: median
+  window:
+    type: scene
+    label_format: "%Y-%m-%d"
+
+pipeline:
+  concurrency: 8
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+
+asset:
+  project: ee-tat3
+  base_path: projects/ee-tat3/assets
+
+auth:
+  method: service_account
+  service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
+  key_file: ee-tat3-835f3bd207eb.json
