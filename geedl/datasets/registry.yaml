@@ -21,6 +21,22 @@ sentinel-2:
   date_property: system:time_start
   slc_off_date: null
 
+sentinel-1-rtc:
+  collection: OPERA/RTC/L2_V1/S1
+  bands:
+    VV:   {desc: "VV backscatter γ⁰ (linear power)", res: 30}
+    VH:   {desc: "VH backscatter γ⁰ (linear power)", res: 30}
+    HV:   {desc: "HV backscatter γ⁰ (linear power)", res: 30}
+    HH:   {desc: "HH backscatter γ⁰ (linear power)", res: 30}
+    mask: {desc: "Valid/layover/shadow mask",          res: 30, scaled: false, internal: true}
+  native_res: 30
+  cloud_mask: null
+  scale_factor: null
+  offset: 0.0
+  date_property: system:time_start
+  slc_off_date: null
+  composite_strategy_override: mosaic
+
 sentinel-1:
   collection: COPERNICUS/S1_GRD
   bands:
