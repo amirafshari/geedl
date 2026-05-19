@@ -12,14 +12,14 @@ dataset:
     order: [B4, B3, B2]
   indices: []
   cloud_mask:
-    enabled: true
+    enabled: false
     profile: auto
-    mask_shadow: true
+    mask_shadow: false
     mask_snow: false
 
 date:
-  start: "2026-05-05"
-  end: "2026-05-05"
+  start: "2026-04-10"
+  end: "2026-04-10"
 
 composite:
   strategy: median
