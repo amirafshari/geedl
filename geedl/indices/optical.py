@@ -82,6 +82,19 @@ def savi(img: ee.Image, ds: str) -> ee.Image:
     ).rename("SAVI")
 
 
+@index("OSI", datasets=["sentinel-2"])
+def osi(img: ee.Image, ds: str) -> ee.Image:
+    b = BAND_MAP[ds]
+    return img.expression(
+        "(GREEN+RED)/BLUE",
+        {
+            "GREEN": img.select(b["green"]),
+            "RED": img.select(b["red"]),
+            "BLUE": img.select(b["blue"]),
+        },
+    ).rename("OSI")
+
+
 @index("BSI", datasets=_OPTICAL_NO_L7)
 def bsi(img: ee.Image, ds: str) -> ee.Image:
     b = BAND_MAP[ds]
