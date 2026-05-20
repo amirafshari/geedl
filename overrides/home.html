@@ -1,0 +1,72 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+  <section class="geedl-hero">
+    <div class="geedl-hero__inner">
+      <span class="geedl-hero__eyebrow">
+        🌱 Talk to it. Get your data.
+      </span>
+      <h1 class="geedl-hero__title">
+        Ask in plain English. <em>Get satellite imagery on your disk.</em>
+      </h1>
+      <p class="geedl-hero__lede">
+        <strong>geedl</strong> is the agent-friendly Earth Engine downloader. Tell Claude,
+        Cursor, Codex — any coding agent — what you want, and it writes the YAML.
+        You run one command. <strong>No Python to write, no SDK to learn, no
+        notebook to debug</strong>, no Cloud Storage, no Drive. Just Sentinel and
+        Landsat imagery, composited, indexed, and written as Cloud-Optimized GeoTIFFs.
+      </p>
+      <div class="geedl-hero__ctas">
+        <a class="geedl-btn geedl-btn--primary" href="getting-started/">
+          Get started →
+        </a>
+        <a class="geedl-btn geedl-btn--ghost" href="https://github.com/amirafshari/geedl">
+          View on GitHub
+        </a>
+      </div>
+      <div class="geedl-hero__meta">
+        <span><strong>Sentinel-1, Sentinel-2, Landsat 7/8/9</strong> out of the box</span>
+        <span><strong>10+ spectral indices</strong> (NDVI, EVI, NDWI, NBR, RVI…)</span>
+        <span><strong>MIT</strong> licensed · Python 3.12+</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="geedl-features">
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">⚡</div>
+      <h3>Direct to local disk</h3>
+      <p>Pixels flow through <code>ee.data.computePixels()</code> straight to your filesystem. No GCS buckets, no Drive folders, no waiting on export tasks.</p>
+    </div>
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">🔁</div>
+      <h3>Resumable & crash-safe</h3>
+      <p>Every tile is checkpointed in SQLite. Atomic writes guarantee no corrupt files. Kill the process and re-run — it picks up exactly where it stopped.</p>
+    </div>
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">💬</div>
+      <h3>Built for AI agents</h3>
+      <p>Every config field is declarative YAML. Drop the README into Claude, Cursor, or Codex and ask in English — the agent emits a runnable job. No code, no SDK, no hallucinated fields.</p>
+    </div>
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">🗺️</div>
+      <h3>Smart tiling</h3>
+      <p>Auto-projects your shapefile to UTM, classifies tiles as inside / partial / outside, skips empty space, and orders by Hilbert curve for cache-warm EE requests.</p>
+    </div>
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">🛰️</div>
+      <h3>Plugin-only indices</h3>
+      <p>Add a new spectral index with one decorated function. NDVI, EVI, NDWI, NDMI, NBR, NDSI, SAVI, BSI, RVI, VV/VH — and your own — all interchangeable in YAML.</p>
+    </div>
+    <div class="geedl-feature">
+      <div class="geedl-feature__icon">📦</div>
+      <h3>COG + STAC + GeoParquet</h3>
+      <p>Outputs are Cloud-Optimized GeoTIFFs with per-tile STAC sidecars and a unified GeoParquet catalog. Readable by QGIS, GDAL, stackstac, and STAC browsers out of the box.</p>
+    </div>
+  </section>
+{% endblock %}
+
+{% block footer %}
+  {{ super() }}
+{% endblock %}
