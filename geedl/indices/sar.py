@@ -29,3 +29,23 @@ def water_s1(img: ee.Image, ds: str) -> ee.Image:
         .And(img.select("VH").lt(0.0063))
         .rename("WATER_S1")
     )
+
+
+@index("RGB_RATIO", datasets=["sentinel-1-rtc"])
+def rgb_ratio(img: ee.Image, ds: str) -> ee.Image:
+    # Copernicus Browser "RGB ratio" false-color on γ⁰ (linear): R=VV, G=VH, B=VH/VV.
+    vv = img.select("VV")
+    vh = img.select("VH")
+    return ee.Image.cat([vv, vh, vh.divide(vv)]).rename(
+        ["RGB_RATIO_R", "RGB_RATIO_G", "RGB_RATIO_B"]
+    )
+
+
+@index("SAR_URBAN", datasets=["sentinel-1-rtc"])
+def sar_urban(img: ee.Image, ds: str) -> ee.Image:
+    # Copernicus Browser "SAR Urban" on γ⁰ (linear): R=VV, G=2*VH, B=VV/VH/100.
+    vv = img.select("VV")
+    vh = img.select("VH")
+    return ee.Image.cat(
+        [vv, vh.multiply(2), vv.divide(vh).divide(100)]
+    ).rename(["SAR_URBAN_R", "SAR_URBAN_G", "SAR_URBAN_B"])

@@ -1,0 +1,42 @@
+# Sentinel-1 RGB ratio false-color (Copernicus Browser script):
+# R=VV, G=VH, B=VH/VV on γ⁰ linear (OPERA RTC).
+# Dark red/black=water, yellow=urban, turquoise=vegetation, dark purple=bare ground.
+job_name: s1_rgb_ratio
+
+roi:
+  path: assets/lavan-test.shp
+
+dataset:
+  name: sentinel-1-rtc
+  bands:
+    select: []
+  indices:
+    - name: RGB_RATIO
+
+date:
+  start: "2026-05-01"
+  end: "2026-05-08"
+
+composite:
+  strategy: mosaic
+  window:
+    type: scene
+    label_format: "%Y-%m-%d"
+
+pipeline:
+  concurrency: 16
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+  compression: DEFLATE
+
+asset:
+  project: ee-tat3
+  base_path: projects/ee-tat3/assets
+
+auth:
+  method: service_account
+  service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
+  key_file: ee-tat3-835f3bd207eb.json

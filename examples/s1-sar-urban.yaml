@@ -1,0 +1,42 @@
+# Sentinel-1 SAR Urban false-color (Copernicus Browser script):
+# R=VV, G=2*VH, B=VV/VH/100 on γ⁰ linear (OPERA RTC).
+# Highlights urban areas and buildings in purple/green by orientation.
+job_name: s1_sar_urban
+
+roi:
+  path: assets/iraq.shp
+
+dataset:
+  name: sentinel-1-rtc
+  bands:
+    select: []
+  indices:
+    - name: SAR_URBAN
+
+date:
+  start: "2026-05-01"
+  end: "2026-05-08"
+
+composite:
+  strategy: mosaic
+  window:
+    type: scene
+    label_format: "%Y-%m-%d"
+
+pipeline:
+  concurrency: 16
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+  compression: DEFLATE
+
+asset:
+  project: ee-tat3
+  base_path: projects/ee-tat3/assets
+
+auth:
+  method: service_account
+  service_account_email: amir-840@ee-tat3.iam.gserviceaccount.com
+  key_file: ee-tat3-835f3bd207eb.json
