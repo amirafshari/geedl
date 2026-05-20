@@ -1,0 +1,323 @@
+/* geedl — climate/forest brand palette */
+
+:root {
+  --geedl-leaf: #2f7d3a;
+  --geedl-leaf-dark: #1f5a28;
+  --geedl-leaf-light: #4ea857;
+  --geedl-moss: #8fb87a;
+  --geedl-earth: #b8855b;
+  --geedl-bark: #3d2f1f;
+  --geedl-mist: #f3f7f1;
+}
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--geedl-leaf);
+  --md-primary-fg-color--light: var(--geedl-leaf-light);
+  --md-primary-fg-color--dark: var(--geedl-leaf-dark);
+  --md-accent-fg-color: var(--geedl-earth);
+  --md-typeset-a-color: var(--geedl-leaf-dark);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--geedl-leaf);
+  --md-primary-fg-color--light: var(--geedl-moss);
+  --md-primary-fg-color--dark: var(--geedl-leaf-dark);
+  --md-accent-fg-color: var(--geedl-moss);
+  --md-typeset-a-color: var(--geedl-moss);
+}
+
+/* Hero on the landing page */
+.geedl-hero {
+  position: relative;
+  padding: 5rem 1.25rem 4rem;
+  background:
+    radial-gradient(ellipse at top left, rgba(78, 168, 87, 0.18), transparent 55%),
+    radial-gradient(ellipse at bottom right, rgba(184, 133, 91, 0.12), transparent 60%),
+    linear-gradient(180deg, var(--geedl-mist) 0%, #ffffff 100%);
+  border-bottom: 1px solid rgba(47, 125, 58, 0.12);
+}
+
+[data-md-color-scheme="slate"] .geedl-hero {
+  background:
+    radial-gradient(ellipse at top left, rgba(78, 168, 87, 0.18), transparent 55%),
+    radial-gradient(ellipse at bottom right, rgba(184, 133, 91, 0.10), transparent 60%),
+    linear-gradient(180deg, #1a2a1d 0%, var(--md-default-bg-color) 100%);
+  border-bottom: 1px solid rgba(143, 184, 122, 0.18);
+}
+
+.geedl-hero__inner {
+  max-width: 64rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.geedl-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid rgba(47, 125, 58, 0.25);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--geedl-leaf-dark);
+  width: fit-content;
+}
+
+[data-md-color-scheme="slate"] .geedl-hero__eyebrow {
+  background: rgba(47, 125, 58, 0.15);
+  border-color: rgba(143, 184, 122, 0.35);
+  color: var(--geedl-moss);
+}
+
+.geedl-hero__title {
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+  line-height: 1.1;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.geedl-hero__title em {
+  font-style: normal;
+  background: linear-gradient(120deg, var(--geedl-leaf) 0%, var(--geedl-moss) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.geedl-hero__lede {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  max-width: 48rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.geedl-hero__ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.geedl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none !important;
+  transition: transform 0.08s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.geedl-btn--primary {
+  background: var(--geedl-leaf);
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px -6px rgba(47, 125, 58, 0.55);
+}
+
+.geedl-btn--primary:hover {
+  background: var(--geedl-leaf-dark);
+  transform: translateY(-1px);
+}
+
+.geedl-btn--ghost {
+  background: transparent;
+  color: var(--geedl-leaf-dark) !important;
+  border: 1px solid rgba(47, 125, 58, 0.35);
+}
+
+[data-md-color-scheme="slate"] .geedl-btn--ghost {
+  color: var(--geedl-moss) !important;
+  border-color: rgba(143, 184, 122, 0.4);
+}
+
+.geedl-btn--ghost:hover {
+  background: rgba(47, 125, 58, 0.08);
+}
+
+.geedl-hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.geedl-hero__meta strong {
+  color: var(--geedl-leaf-dark);
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .geedl-hero__meta strong {
+  color: var(--geedl-moss);
+}
+
+/* Feature grid */
+.geedl-features {
+  max-width: 64rem;
+  margin: 3rem auto 1rem;
+  padding: 0 1.25rem;
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.geedl-feature {
+  padding: 1.5rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 12px;
+  background: var(--md-default-bg-color);
+  transition: transform 0.12s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.geedl-feature:hover {
+  transform: translateY(-2px);
+  border-color: rgba(47, 125, 58, 0.4);
+  box-shadow: 0 10px 25px -15px rgba(47, 125, 58, 0.35);
+}
+
+.geedl-feature h3 {
+  margin: 0.5rem 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.geedl-feature__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+  background: rgba(47, 125, 58, 0.12);
+  color: var(--geedl-leaf-dark);
+  font-size: 1.2rem;
+}
+
+[data-md-color-scheme="slate"] .geedl-feature__icon {
+  background: rgba(143, 184, 122, 0.18);
+  color: var(--geedl-moss);
+}
+
+.geedl-feature p {
+  margin: 0;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+/* "Talk to it" conversation section */
+.geedl-talk {
+  max-width: 56rem;
+  margin: 4rem auto 2rem;
+  padding: 2.5rem 1.5rem 1rem;
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse at top right, rgba(78, 168, 87, 0.10), transparent 60%),
+    var(--md-default-bg-color);
+  border: 1px solid rgba(47, 125, 58, 0.18);
+}
+
+[data-md-color-scheme="slate"] .geedl-talk {
+  border-color: rgba(143, 184, 122, 0.22);
+}
+
+.geedl-talk__eyebrow {
+  display: inline-block;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(47, 125, 58, 0.12);
+  color: var(--geedl-leaf-dark);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+[data-md-color-scheme="slate"] .geedl-talk__eyebrow {
+  background: rgba(143, 184, 122, 0.18);
+  color: var(--geedl-moss);
+}
+
+.geedl-talk h2.geedl-talk__title,
+.geedl-talk__title {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  line-height: 1.2;
+  margin: 0.75rem 0 0.5rem;
+  letter-spacing: -0.01em;
+  border: 0;
+}
+
+.geedl-chat {
+  display: grid;
+  gap: 1rem;
+  margin: 2rem 0 1.5rem;
+}
+
+.geedl-chat__msg {
+  padding: 1.1rem 1.25rem;
+  border-radius: 14px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  background: var(--md-code-bg-color);
+}
+
+.geedl-chat__msg--user {
+  background: linear-gradient(135deg, rgba(47, 125, 58, 0.07), rgba(78, 168, 87, 0.04));
+  border-color: rgba(47, 125, 58, 0.22);
+  margin-right: 1.5rem;
+}
+
+.geedl-chat__msg--agent {
+  background: linear-gradient(135deg, rgba(184, 133, 91, 0.06), rgba(143, 184, 122, 0.04));
+  border-color: rgba(184, 133, 91, 0.20);
+  margin-left: 1.5rem;
+}
+
+[data-md-color-scheme="slate"] .geedl-chat__msg--user {
+  background: linear-gradient(135deg, rgba(78, 168, 87, 0.10), rgba(47, 125, 58, 0.06));
+}
+
+[data-md-color-scheme="slate"] .geedl-chat__msg--agent {
+  background: linear-gradient(135deg, rgba(184, 133, 91, 0.08), rgba(143, 184, 122, 0.05));
+}
+
+.geedl-chat__who {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-default-fg-color--light);
+  margin-bottom: 0.5rem;
+}
+
+.geedl-chat__msg blockquote {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color);
+  font-style: normal;
+  quotes: none;
+}
+
+.geedl-chat__msg blockquote::before { content: none; }
+
+.geedl-chat__msg > p:last-child,
+.geedl-chat__msg .highlight:last-child {
+  margin-bottom: 0;
+}
+
+.geedl-cta {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 2rem 0 1rem;
+  flex-wrap: wrap;
+}
