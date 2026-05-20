@@ -147,6 +147,97 @@ geedl status -c job.yaml               # check progress
 
 ---
 
+## Talk to it. Get a job.yaml.
+
+`geedl` was designed so the entire job — sensor, indices, time windows, output
+shape, concurrency, auth — lives in **one declarative YAML file**. That makes
+it the ideal target for an LLM coding agent: there's no Python to write, no
+SDK to learn, no notebook to debug. You describe what you want, the agent
+emits a config, you run it.
+
+Drop this README and `CLAUDE.md` into your agent's context (Claude Code,
+Cursor, Codex, Aider, ChatGPT — any of them), then ask in plain English.
+
+**You:**
+
+> I need a monthly NDVI and NDWI time series over my farm in Tuscany for
+> all of 2023. Shapefile is at `data/tuscany.shp`. I want Sentinel-2 with
+> clouds and shadows masked, output as COGs, and just the indices — drop
+> the source bands. Run 24 tiles in parallel.
+
+**Agent (one shot, produces `job.yaml`):**
+
+```yaml
+job_name: tuscany_ndvi_ndwi_2023
+
+roi:
+  path: data/tuscany.shp
+
+dataset:
+  name: sentinel-2
+  bands:
+    select: []                     # drop source bands, keep only indices
+  indices:
+    - {name: NDVI}
+    - {name: NDWI}
+  cloud_mask:
+    enabled: true
+    mask_shadow: true
+    mask_snow: false
+
+date:
+  start: "2023-01-01"
+  end:   "2023-12-31"
+
+composite:
+  strategy: median
+  window:
+    type: calendar_month
+    label_format: "%Y-%m"
+
+output:
+  dir: ./output
+  format: COG
+  dtype: float32
+  compression: DEFLATE
+  structure:
+    separate_indices: true         # one GeoTIFF per index
+
+pipeline:
+  concurrency: 24
+
+asset:
+  project: my-ee-project
+  base_path: projects/my-ee-project/assets
+
+auth:
+  method: browser
+```
+
+**You:**
+
+```bash
+geedl plan -c job.yaml && geedl run -c job.yaml
+```
+
+That's the whole loop. Need to change sensor? "Switch to Landsat 8 with the
+same indices." Need a different window? "Make it 16-day composites anchored
+on the start of the window." Need urban detection from SAR instead?
+"Give me the Sentinel-1 SAR_URBAN false-color over the same ROI for the
+first week of May." The agent edits the YAML — you re-run `geedl`.
+
+See [`examples/`](examples/) for ten concrete configs (NDVI, NDWI, RGB,
+S1 RTC, oil-spill OSFC, S1 SAR urban false-color, scene-mode, …) that
+double as few-shot prompts for any LLM.
+
+> **Why this works**: `CLAUDE.md` documents every config field, every module
+> boundary, and every non-negotiable constraint (atomic writes, plugin-only
+> indices, S1-must-be-mosaic, …). An agent reading it has the full schema
+> and the full set of rules — so it doesn't hallucinate fields or pick
+> physically wrong composite strategies.
+
+---
+
 ## Usage
 
 ### Authentication
